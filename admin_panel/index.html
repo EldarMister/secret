@@ -680,6 +680,29 @@
             </div>
         </div>
     </div>
+    <!-- Edit Cafe Modal -->
+    <div class="modal-overlay" id="modal-edit-cafe">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">✏️ Редактировать кафе</h3>
+                <button class="modal-close" onclick="closeModal('modal-edit-cafe')">✕</button>
+            </div>
+            <div class="modal-body">
+                <input type="text" id="edit-cafe-id" placeholder="Telegram ID" readonly>
+                <input type="text" id="edit-cafe-name" placeholder="Название кафе">
+                <input type="text" id="edit-cafe-phone" placeholder="Телефон">
+                <input type="text" id="edit-cafe-address" placeholder="Адрес">
+                <input type="number" id="edit-cafe-comm" placeholder="Комиссия, %" min="0" max="100">
+                <label class="checkbox">
+                    <input type="checkbox" id="edit-cafe-active"> Активно
+                </label>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-edit-cafe')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitEditCafe()">Сохранить</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Add Menu Item Modal -->
     <div class="modal-overlay" id="modal-add-item">

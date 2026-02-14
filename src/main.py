@@ -285,9 +285,15 @@ def handle_whatsapp():
 
 def handle_idle_state(user: User, message: str, db) -> tuple:
     """Обработка состояния ожидания — ИИ определяет намерение"""
-    
-    # Используем ИИ для определения намерения
-    nlu_result = parse_user_message(message)
+    msg_lower = message.lower()
+
+    # Жёсткая проверка на «меню» / запрос еды, чтобы не путать с доставкой
+    menu_keywords = ["меню", "мену", "мэню", "менью", "менйу", "миню", "менюу", "menu", "меню керек", "мага меню"]
+    if any(k in msg_lower for k in menu_keywords):
+        nlu_result = {"intent": "cafe", "from_address": None, "to_address": None, "order_details": None, "cargo_type": None}
+    else:
+        # Используем ИИ для определения намерения
+        nlu_result = parse_user_message(message)
     intent = nlu_result.get("intent", "unknown")
     
     logger.info(f"NLU intent for {user.phone}: {intent}")

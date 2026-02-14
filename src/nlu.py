@@ -175,7 +175,7 @@ def _fallback_intent(message: str) -> dict:
 
     intent = "unknown"
 
-    if any(w in msg_lower for w in ["кафе", "еда", "поесть", "тамак", "меню", "мену", "миню", "минйу", "менйу"]):
+    if any(w in msg_lower for w in ["кафе", "еда", "поесть", "тамак", "меню", "мену", "миню", "минйу", "менйу", "мэню", "менюу", "мага меню", "меню керек", "menu"]):
         intent = "cafe"
     elif any(w in msg_lower for w in ["магазин", "продукты", "покупки", "дүкөн"]):
         intent = "shop"

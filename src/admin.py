@@ -392,6 +392,55 @@ def add_cafe():
         return jsonify({"error": str(e)}), 500
 
 
+@admin_bp.route('/cafes/<telegram_id>', methods=['PUT'])
+def update_cafe(telegram_id):
+    """Обновить данные кафе"""
+    try:
+        data = request.get_json()
+
+        name = data.get('name')
+        phone = data.get('phone')
+        address = data.get('address')
+        commission_percent = data.get('commission_percent')
+        is_active = data.get('is_active')
+
+        db = get_db()
+        success = db.update_cafe_info(
+            telegram_id,
+            name=name,
+            phone=phone,
+            address=address,
+            commission_percent=commission_percent,
+            is_active=is_active
+        )
+
+        if success:
+            return jsonify({"success": True, "message": "Cafe updated"}), 200
+        else:
+            return jsonify({"error": "Cafe not found or no changes"}), 404
+
+    except Exception as e:
+        logger.exception("Error updating cafe")
+        return jsonify({"error": str(e)}), 500
+
+
+@admin_bp.route('/cafes/<telegram_id>', methods=['DELETE'])
+def remove_cafe(telegram_id):
+    """Деактивировать/удалить кафе"""
+    try:
+        db = get_db()
+        success = db.remove_cafe(telegram_id)
+
+        if success:
+            return jsonify({"success": True, "message": "Cafe removed"}), 200
+        else:
+            return jsonify({"error": "Cafe not found"}), 404
+
+    except Exception as e:
+        logger.exception("Error removing cafe")
+        return jsonify({"error": str(e)}), 500
+
+
 @admin_bp.route('/cafes/<telegram_id>/debt', methods=['GET'])
 def get_cafe_debt(telegram_id):
     """Получить долг кафе"""

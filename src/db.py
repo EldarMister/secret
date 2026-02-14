@@ -763,6 +763,39 @@ class Database:
             self.log_transaction("CAFE_ADDED", telegram_id, details=f"Cafe: {name}")
             return True
     
+    def update_cafe_info(self, telegram_id: str, **fields) -> bool:
+        """Обновить данные кафе (name, phone, address, commission_percent, is_active)"""
+        allowed = {'name', 'phone', 'address', 'commission_percent', 'is_active'}
+        updates = {k: v for k, v in fields.items() if k in allowed and v is not None}
+
+        if not updates:
+            return False
+
+        set_parts = [f"{k} = %s" for k in updates]
+        values = list(updates.values()) + [telegram_id]
+
+        with self.get_cursor(commit=True) as cur:
+            cur.execute(
+                f"UPDATE cafes SET {', '.join(set_parts)} WHERE telegram_id = %s",
+                values
+            )
+            if cur.rowcount > 0:
+                self.log_transaction("CAFE_UPDATED", telegram_id, details=",".join(updates.keys()))
+                return True
+            return False
+    
+    def remove_cafe(self, telegram_id: str) -> bool:
+        """Деактивировать кафе"""
+        with self.get_cursor(commit=True) as cur:
+            cur.execute(
+                """UPDATE cafes SET is_active = FALSE WHERE telegram_id = %s""",
+                (telegram_id,)
+            )
+            if cur.rowcount > 0:
+                self.log_transaction("CAFE_REMOVED", telegram_id)
+                return True
+            return False
+    
     def update_cafe_debt(self, telegram_id: str, order_amount: float) -> Tuple[bool, float]:
         """Обновить долг кафе (добавить комиссию)"""
         commission = order_amount * (config.CAFE_COMMISSION_PERCENT / 100)

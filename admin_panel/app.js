@@ -409,7 +409,9 @@ async function loadCafes() {
                 <td>${c.is_active ? '<span class="badge success">Активно</span>' : '<span class="badge danger">Неакт.</span>'}</td>
                 <td>
                     <div style="display:flex;gap:6px;">
+                        <button class="btn btn-ghost btn-sm" onclick="showEditCafeModal('${c.telegram_id}', '${esc(c.name)}', '${esc(c.phone || '')}', '${esc(c.address || '')}', ${c.commission_percent || 5}, ${c.is_active ? 'true' : 'false'})" title="Редактировать">✏️</button>
                         <button class="btn btn-success btn-sm" onclick="showBalanceModal('cafe', '${c.telegram_id}', '${esc(c.name)}', ${-debt})" title="Оплата долга">💰</button>
+                        <button class="btn btn-danger btn-sm" onclick="removeEntity('cafes', '${c.telegram_id}')" title="Удалить">🗑️</button>
                     </div>
                 </td>
             </tr>`;
@@ -444,6 +446,41 @@ async function submitAddCafe() {
         await api('/cafes', { method: 'POST', body: JSON.stringify(data) });
         toast('✅ Кафе добавлено!', 'success');
         closeModal('modal-add-cafe');
+        loadCafes();
+    } catch (err) {
+        toast('Ошибка: ' + err.message, 'error');
+    }
+}
+
+function showEditCafeModal(telegramId, name, phone, address, commission, isActive) {
+    document.getElementById('edit-cafe-id').value = telegramId;
+    document.getElementById('edit-cafe-name').value = name || '';
+    document.getElementById('edit-cafe-phone').value = phone || '';
+    document.getElementById('edit-cafe-address').value = address || '';
+    document.getElementById('edit-cafe-comm').value = commission || 5;
+    document.getElementById('edit-cafe-active').checked = !!isActive;
+    openModal('modal-edit-cafe');
+}
+
+async function submitEditCafe() {
+    const telegram_id = val('edit-cafe-id');
+    const data = {
+        name: val('edit-cafe-name'),
+        phone: val('edit-cafe-phone'),
+        address: val('edit-cafe-address'),
+        commission_percent: parseInt(val('edit-cafe-comm') || '5', 10),
+        is_active: document.getElementById('edit-cafe-active').checked
+    };
+
+    if (!data.name) {
+        toast('Название обязательно', 'error');
+        return;
+    }
+
+    try {
+        await api(`/cafes/${telegram_id}`, { method: 'PUT', body: JSON.stringify(data) });
+        toast('Данные кафе обновлены', 'success');
+        closeModal('modal-edit-cafe');
         loadCafes();
     } catch (err) {
         toast('Ошибка: ' + err.message, 'error');
@@ -664,7 +701,7 @@ async function submitBalanceWithSign(sign) {
 // ============================================================================
 
 async function removeEntity(type, telegramId) {
-    const names = { drivers: 'водителя', pharmacies: 'аптеку', shoppers: 'закупщика' };
+    const names = { drivers: 'водителя', pharmacies: 'аптеку', shoppers: 'закупщика', cafes: 'кафе' };
     if (!confirm(`Вы уверены, что хотите удалить ${names[type] || 'запись'}?`)) return;
 
     try {
