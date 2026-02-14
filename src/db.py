@@ -56,266 +56,271 @@ class Database:
     def _init_tables(self):
         """Инициализация таблиц базы данных"""
         with self.get_cursor(commit=True) as cur:
-            # Таблица пользователей (WhatsApp)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    phone VARCHAR(20) UNIQUE NOT NULL,
-                    name VARCHAR(100),
-                    current_state VARCHAR(50) DEFAULT 'IDLE',
-                    temp_data JSONB DEFAULT '{}',
-                    language VARCHAR(10) DEFAULT 'ru',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+            # Serialize schema init across multiple workers
+            cur.execute("SELECT pg_advisory_lock(741852963)")
+            try:
+                # Таблица пользователей (WhatsApp)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        phone VARCHAR(20) UNIQUE NOT NULL,
+                        name VARCHAR(100),
+                        current_state VARCHAR(50) DEFAULT 'IDLE',
+                        temp_data JSONB DEFAULT '{}',
+                        language VARCHAR(10) DEFAULT 'ru',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             
-            # Таблица заказов
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS orders (
-                    id SERIAL PRIMARY KEY,
-                    order_id VARCHAR(20) UNIQUE NOT NULL,
-                    service_type VARCHAR(20) NOT NULL,
-                    status VARCHAR(30) DEFAULT 'PENDING',
-                    client_phone VARCHAR(20) NOT NULL,
-                    details TEXT,
-                    address VARCHAR(255),
-                    payment_method VARCHAR(20),
-                    price_total DECIMAL(10, 2) DEFAULT 0,
-                    commission DECIMAL(10, 2) DEFAULT 0,
-                    provider_id VARCHAR(50),
-                    driver_id VARCHAR(50),
-                    driver_assigned_at TIMESTAMP,
-                    driver_commission DECIMAL(10, 2) DEFAULT 0,
-                    cargo_type VARCHAR(50),
-                    ready_time INTEGER,
-                    is_urgent BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    completed_at TIMESTAMP
-                )
-            """)
+                # Таблица заказов
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS orders (
+                        id SERIAL PRIMARY KEY,
+                        order_id VARCHAR(20) UNIQUE NOT NULL,
+                        service_type VARCHAR(20) NOT NULL,
+                        status VARCHAR(30) DEFAULT 'PENDING',
+                        client_phone VARCHAR(20) NOT NULL,
+                        details TEXT,
+                        address VARCHAR(255),
+                        payment_method VARCHAR(20),
+                        price_total DECIMAL(10, 2) DEFAULT 0,
+                        commission DECIMAL(10, 2) DEFAULT 0,
+                        provider_id VARCHAR(50),
+                        driver_id VARCHAR(50),
+                        driver_assigned_at TIMESTAMP,
+                        driver_commission DECIMAL(10, 2) DEFAULT 0,
+                        cargo_type VARCHAR(50),
+                        ready_time INTEGER,
+                        is_urgent BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        completed_at TIMESTAMP
+                    )
+                """)
             
-            # Таблица водителей (такси, портер)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS drivers (
-                    id SERIAL PRIMARY KEY,
-                    telegram_id VARCHAR(50) UNIQUE NOT NULL,
-                    name VARCHAR(100),
-                    phone VARCHAR(20),
-                    car_model VARCHAR(100),
-                    plate VARCHAR(20),
-                    driver_type VARCHAR(20) DEFAULT 'taxi',
-                    balance DECIMAL(10, 2) DEFAULT 0,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    is_blocked BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Таблица водителей (такси, портер)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS drivers (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id VARCHAR(50) UNIQUE NOT NULL,
+                        name VARCHAR(100),
+                        phone VARCHAR(20),
+                        car_model VARCHAR(100),
+                        plate VARCHAR(20),
+                        driver_type VARCHAR(20) DEFAULT 'taxi',
+                        balance DECIMAL(10, 2) DEFAULT 0,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        is_blocked BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             
-            # Таблица кафе
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS cafes (
-                    id SERIAL PRIMARY KEY,
-                    telegram_id VARCHAR(50) UNIQUE NOT NULL,
-                    name VARCHAR(100) NOT NULL,
-                    phone VARCHAR(20),
-                    address VARCHAR(255),
-                    debt DECIMAL(10, 2) DEFAULT 0,
-                    commission_percent INTEGER DEFAULT 5,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Таблица кафе
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS cafes (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id VARCHAR(50) UNIQUE NOT NULL,
+                        name VARCHAR(100) NOT NULL,
+                        phone VARCHAR(20),
+                        address VARCHAR(255),
+                        debt DECIMAL(10, 2) DEFAULT 0,
+                        commission_percent INTEGER DEFAULT 5,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
 
-            # Категории меню по кафе
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS cafe_categories (
-                    id SERIAL PRIMARY KEY,
-                    cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
-                    name VARCHAR(100) NOT NULL,
-                    sort_order INTEGER DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (cafe_id, name)
-                )
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cafe_categories_cafe ON cafe_categories(cafe_id)")
+                # Категории меню по кафе
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS cafe_categories (
+                        id SERIAL PRIMARY KEY,
+                        cafe_id INTEGER REFERENCES cafes(id) ON DELETE CASCADE,
+                        name VARCHAR(100) NOT NULL,
+                        sort_order INTEGER DEFAULT 0,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (cafe_id, name)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_cafe_categories_cafe ON cafe_categories(cafe_id)")
             
-            # Позиции меню кафе
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS menu_items (
-                    id SERIAL PRIMARY KEY,
-                    cafe_id INTEGER REFERENCES cafes(id),
-                    name VARCHAR(200) NOT NULL,
-                    price DECIMAL(10, 2) NOT NULL,
-                    category VARCHAR(100) DEFAULT 'Основное',
-                    category_id INTEGER REFERENCES cafe_categories(id),
-                    is_available BOOLEAN DEFAULT TRUE,
-                    sort_order INTEGER DEFAULT 0,
-                    image_url TEXT DEFAULT NULL,
-                    description TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            # Migration: add image_url if missing
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'menu_items' AND column_name = 'image_url'
-                    ) THEN
-                        ALTER TABLE menu_items ADD COLUMN image_url TEXT DEFAULT NULL;
-                    END IF;
-                END $$;
-            """)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'orders' AND column_name = 'driver_assigned_at'
-                    ) THEN
-                        ALTER TABLE orders ADD COLUMN driver_assigned_at TIMESTAMP;
-                    END IF;
-                END $$;
-            """)
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'orders' AND column_name = 'driver_commission'
-                    ) THEN
-                        ALTER TABLE orders ADD COLUMN driver_commission DECIMAL(10,2) DEFAULT 0;
-                    END IF;
-                END $$;
-            """)
-            # Migration: add description if missing
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'menu_items' AND column_name = 'description'
-                    ) THEN
-                        ALTER TABLE menu_items ADD COLUMN description TEXT;
-                    END IF;
-                END $$;
-            """)
-            # Migration: add category_id if missing
-            cur.execute("""
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM information_schema.columns
-                        WHERE table_name = 'menu_items' AND column_name = 'category_id'
-                    ) THEN
-                        ALTER TABLE menu_items ADD COLUMN category_id INTEGER REFERENCES cafe_categories(id);
-                    END IF;
-                END $$;
-            """)
+                # Позиции меню кафе
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS menu_items (
+                        id SERIAL PRIMARY KEY,
+                        cafe_id INTEGER REFERENCES cafes(id),
+                        name VARCHAR(200) NOT NULL,
+                        price DECIMAL(10, 2) NOT NULL,
+                        category VARCHAR(100) DEFAULT 'Основное',
+                        category_id INTEGER REFERENCES cafe_categories(id),
+                        is_available BOOLEAN DEFAULT TRUE,
+                        sort_order INTEGER DEFAULT 0,
+                        image_url TEXT DEFAULT NULL,
+                        description TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                # Migration: add image_url if missing
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'menu_items' AND column_name = 'image_url'
+                        ) THEN
+                            ALTER TABLE menu_items ADD COLUMN image_url TEXT DEFAULT NULL;
+                        END IF;
+                    END $$;
+                """)
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'driver_assigned_at'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN driver_assigned_at TIMESTAMP;
+                        END IF;
+                    END $$;
+                """)
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'orders' AND column_name = 'driver_commission'
+                        ) THEN
+                            ALTER TABLE orders ADD COLUMN driver_commission DECIMAL(10,2) DEFAULT 0;
+                        END IF;
+                    END $$;
+                """)
+                # Migration: add description if missing
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'menu_items' AND column_name = 'description'
+                        ) THEN
+                            ALTER TABLE menu_items ADD COLUMN description TEXT;
+                        END IF;
+                    END $$;
+                """)
+                # Migration: add category_id if missing
+                cur.execute("""
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_name = 'menu_items' AND column_name = 'category_id'
+                        ) THEN
+                            ALTER TABLE menu_items ADD COLUMN category_id INTEGER REFERENCES cafe_categories(id);
+                        END IF;
+                    END $$;
+                """)
 
-            # Веб-заказы (корзины с сайта)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS web_orders (
-                    id SERIAL PRIMARY KEY,
-                    order_code VARCHAR(10) UNIQUE NOT NULL,
-                    cafe_id INTEGER REFERENCES cafes(id),
-                    cafe_name VARCHAR(100),
-                    items_json JSONB NOT NULL,
-                    total_price DECIMAL(10, 2) NOT NULL,
-                    status VARCHAR(20) DEFAULT 'PENDING',
-                    client_phone VARCHAR(20),
-                    address VARCHAR(255),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Веб-заказы (корзины с сайта)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS web_orders (
+                        id SERIAL PRIMARY KEY,
+                        order_code VARCHAR(10) UNIQUE NOT NULL,
+                        cafe_id INTEGER REFERENCES cafes(id),
+                        cafe_name VARCHAR(100),
+                        items_json JSONB NOT NULL,
+                        total_price DECIMAL(10, 2) NOT NULL,
+                        status VARCHAR(20) DEFAULT 'PENDING',
+                        client_phone VARCHAR(20),
+                        address VARCHAR(255),
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             
-            # Таблица аптек
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS pharmacies (
-                    id SERIAL PRIMARY KEY,
-                    telegram_id VARCHAR(50) UNIQUE NOT NULL,
-                    name VARCHAR(100) NOT NULL,
-                    phone VARCHAR(20),
-                    address VARCHAR(255),
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Таблица аптек
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pharmacies (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id VARCHAR(50) UNIQUE NOT NULL,
+                        name VARCHAR(100) NOT NULL,
+                        phone VARCHAR(20),
+                        address VARCHAR(255),
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             
-            # Таблица закупщиков
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS shoppers (
-                    id SERIAL PRIMARY KEY,
-                    telegram_id VARCHAR(50) UNIQUE NOT NULL,
-                    name VARCHAR(100),
-                    phone VARCHAR(20),
-                    balance DECIMAL(10, 2) DEFAULT 0,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Таблица закупщиков
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS shoppers (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id VARCHAR(50) UNIQUE NOT NULL,
+                        name VARCHAR(100),
+                        phone VARCHAR(20),
+                        balance DECIMAL(10, 2) DEFAULT 0,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             
-            # Таблица транзакций (логи)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS transactions (
-                    id SERIAL PRIMARY KEY,
-                    action VARCHAR(50) NOT NULL,
-                    user_id VARCHAR(50),
-                    order_id VARCHAR(20),
-                    amount DECIMAL(10, 2),
-                    details TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Таблица транзакций (логи)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS transactions (
+                        id SERIAL PRIMARY KEY,
+                        action VARCHAR(50) NOT NULL,
+                        user_id VARCHAR(50),
+                        order_id VARCHAR(20),
+                        amount DECIMAL(10, 2),
+                        details TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             
-            # Таблица для отслеживания таймаутов (аукционы)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS auction_timers (
-                    id SERIAL PRIMARY KEY,
-                    order_id VARCHAR(20) NOT NULL,
-                    service_type VARCHAR(20) NOT NULL,
-                    telegram_message_id VARCHAR(50),
-                    chat_id VARCHAR(50),
-                    started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    expires_at TIMESTAMP NOT NULL,
-                    is_processed BOOLEAN DEFAULT FALSE
-                )
-            """)
+                # Таблица для отслеживания таймаутов (аукционы)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS auction_timers (
+                        id SERIAL PRIMARY KEY,
+                        order_id VARCHAR(20) NOT NULL,
+                        service_type VARCHAR(20) NOT NULL,
+                        telegram_message_id VARCHAR(50),
+                        chat_id VARCHAR(50),
+                        started_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP NOT NULL,
+                        is_processed BOOLEAN DEFAULT FALSE
+                    )
+                """)
             
-            # Таблица цен от аптек (временная)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS pharmacy_bids (
-                    id SERIAL PRIMARY KEY,
-                    order_id VARCHAR(20) NOT NULL,
-                    pharmacy_id VARCHAR(50) NOT NULL,
-                    price DECIMAL(10, 2) NOT NULL,
-                    is_selected BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Таблица цен от аптек (временная)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pharmacy_bids (
+                        id SERIAL PRIMARY KEY,
+                        order_id VARCHAR(20) NOT NULL,
+                        pharmacy_id VARCHAR(50) NOT NULL,
+                        price DECIMAL(10, 2) NOT NULL,
+                        is_selected BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
             
-            # Индексы для оптимизации
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_client ON orders(client_phone)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_auction_timers ON auction_timers(expires_at, is_processed)")
+                # Индексы для оптимизации
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_client ON orders(client_phone)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_auction_timers ON auction_timers(expires_at, is_processed)")
             
-            # Таблица Telegram-сессий (для регистрации водителей)
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS telegram_sessions (
-                    id SERIAL PRIMARY KEY,
-                    telegram_id VARCHAR(50) UNIQUE NOT NULL,
-                    state VARCHAR(50) DEFAULT 'IDLE',
-                    temp_data JSONB DEFAULT '{}',
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_telegram_sessions ON telegram_sessions(telegram_id)")
+                # Таблица Telegram-сессий (для регистрации водителей)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS telegram_sessions (
+                        id SERIAL PRIMARY KEY,
+                        telegram_id VARCHAR(50) UNIQUE NOT NULL,
+                        state VARCHAR(50) DEFAULT 'IDLE',
+                        temp_data JSONB DEFAULT '{}',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_telegram_sessions ON telegram_sessions(telegram_id)")
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(741852963)")
     
     # ==========================================================================
     # USERS METHODS
