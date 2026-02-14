@@ -391,12 +391,7 @@ def handle_idle_state(user: User, message: str, db) -> tuple:
             user.set_temp_data('taxi_to', to_addr)
             user.set_temp_data('taxi_route', f"{from_addr} — {to_addr}")
             user.set_state(config.STATE_TAXI_PRICE_CHOICE)
-            
-            price_choice_msg = config.TAXI_PRICE_CHOICE_PROMPT.format(
-                from_address=from_addr,
-                to_address=to_addr
-            )
-            send_whatsapp(user.phone, price_choice_msg)
+            _send_taxi_price_choice(user.phone, from_addr, to_addr)
         else:
             # Адреса не указаны — спрашиваем
             user.set_temp_data('taxi_from', '')
@@ -1020,6 +1015,21 @@ def handle_pharmacy_request(user: User, message: str, media_url: str, db) -> tup
 # TAXI FLOW
 # =============================================================================
 
+def _send_taxi_price_choice(phone: str, from_address: str, to_address: str) -> bool:
+    """Отправить выбор цены для такси с кнопками и fallback на текст."""
+    price_choice_msg = config.TAXI_PRICE_CHOICE_PROMPT.format(
+        from_address=from_address,
+        to_address=to_address
+    )
+    buttons = [
+        {"text": "✅ Да / Ооба", "id": "btn_taxi_custom"},
+        {"text": "❌ Нет / Жок", "id": "btn_taxi_standard"},
+    ]
+    if send_whatsapp_buttons(phone, price_choice_msg, buttons):
+        return True
+    return send_whatsapp(phone, price_choice_msg)
+
+
 def handle_taxi_route(user: User, message: str, db) -> tuple:
     """Обработка маршрута такси: собираем откуда/куда до полной информации."""
     msg = message.strip()
@@ -1063,12 +1073,7 @@ def handle_taxi_route(user: User, message: str, db) -> tuple:
         user.set_temp_data('taxi_to', to_address)
         user.set_temp_data('taxi_route', f"{from_address} — {to_address}")
         user.set_state(config.STATE_TAXI_PRICE_CHOICE)
-
-        price_choice_msg = config.TAXI_PRICE_CHOICE_PROMPT.format(
-            from_address=from_address,
-            to_address=to_address
-        )
-        send_whatsapp(user.phone, price_choice_msg)
+        _send_taxi_price_choice(user.phone, from_address, to_address)
         return jsonify({"status": "ok"}), 200
 
     # Если сразу извлекли оба адреса
@@ -1150,13 +1155,13 @@ def handle_taxi_price_choice(user: User, message: str, db) -> tuple:
     to_addr = user.get_temp_data('taxi_to', '')
     
     # Клиент хочет предложить свою цену
-    if msg_lower in ('btn_taxi_custom', 'да', 'yes', 'ооба', 'ообо'):
+    if msg_lower in ('btn_taxi_custom', 'да', 'yes', 'ооба', 'ообо', '1'):
         user.set_state(config.STATE_TAXI_CUSTOM_PRICE)
         send_whatsapp(user.phone, config.TAXI_CUSTOM_PRICE_PROMPT)
         return jsonify({"status": "ok"}), 200
     
     # Клиент отказался — стандартный тариф
-    if msg_lower in ('btn_taxi_standard', 'нет', 'no', 'жок'):
+    if msg_lower in ('btn_taxi_standard', 'нет', 'no', 'жок', '2'):
         user.set_state(config.STATE_CONFIRM_ORDER)
         confirm_msg = config.CONFIRM_TAXI.format(
             from_address=from_addr,
@@ -1166,11 +1171,7 @@ def handle_taxi_price_choice(user: User, message: str, db) -> tuple:
         return jsonify({"status": "ok"}), 200
     
     # Непонятный ответ — переспрашиваем
-    price_choice_msg = config.TAXI_PRICE_CHOICE_PROMPT.format(
-        from_address=from_addr,
-        to_address=to_addr
-    )
-    send_whatsapp(user.phone, price_choice_msg)
+    _send_taxi_price_choice(user.phone, from_addr, to_addr)
     return jsonify({"status": "ok"}), 200
 
 
