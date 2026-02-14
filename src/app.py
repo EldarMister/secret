@@ -5,6 +5,7 @@ Application Factory для Business Assistant GO
 
 from flask import Flask, request, jsonify
 import logging
+import os
 import threading
 import time
 from datetime import datetime
@@ -15,6 +16,9 @@ from telegram_handler import handle_telegram_webhook
 from admin import admin_bp
 
 # Настройка логирования
+log_dir = os.path.dirname(config.LOG_FILE)
+if log_dir:
+    os.makedirs(log_dir, exist_ok=True)
 logging.basicConfig(
     level=getattr(logging, config.LOG_LEVEL),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
