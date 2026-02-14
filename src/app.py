@@ -1,0 +1,94 @@
+"""
+Application Factory для Business Assistant GO
+Обновленная версия согласно ТЗ v2.0
+"""
+
+from flask import Flask, request, jsonify
+import logging
+import threading
+import time
+from datetime import datetime
+
+import config
+from db import get_db
+from telegram_handler import handle_telegram_webhook
+from admin import admin_bp
+
+# Настройка логирования
+logging.basicConfig(
+    level=getattr(logging, config.LOG_LEVEL),
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(config.LOG_FILE),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# BACKGROUND CRON SCHEDULER
+# =============================================================================
+
+def _cron_loop():
+    """Фоновый цикл для проверки таймаутов каждые 30 секунд"""
+    from cron_jobs import run_all_cron_jobs
+    while True:
+        try:
+            run_all_cron_jobs()
+        except Exception as e:
+            logger.exception("Cron loop error")
+        time.sleep(30)
+
+
+def create_app():
+    """Фабрика приложения Flask"""
+    app = Flask(__name__)
+    
+    # Регистрация blueprints
+    app.register_blueprint(admin_bp)
+    
+    from menu import menu_bp
+    app.register_blueprint(menu_bp)
+    
+    # Регистрация роутов
+    from main import handle_whatsapp, health_check
+    
+    @app.route('/whatsapp_webhook', methods=['POST'])
+    def whatsapp_webhook():
+        return handle_whatsapp()
+    
+    @app.route('/telegram_webhook', methods=['POST'])
+    def telegram_webhook():
+        return handle_telegram_webhook()
+    
+    @app.route('/health', methods=['GET'])
+    def health():
+        return health_check()
+    
+    # Инициализация БД при старте
+    with app.app_context():
+        try:
+            db = get_db()
+            logger.info("Database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+    
+    # Запуск фонового планировщика
+    cron_thread = threading.Thread(target=_cron_loop, daemon=True)
+    cron_thread.start()
+    logger.info("Background cron scheduler started (every 30s)")
+    
+    return app
+
+
+# Создание приложения для Gunicorn
+app = create_app()
+
+if __name__ == '__main__':
+    logger.info("Starting Business Assistant GO server...")
+    logger.info(f"Ramadan mode: {config.IS_RAMADAN}")
+    app.run(host='0.0.0.0', port=config.PORT, debug=config.FLASK_DEBUG)
+
+# Production запуск (Railway):
+# gunicorn --chdir src -w 2 -b 0.0.0.0:$PORT app:app

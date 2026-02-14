@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Жардамчы ГО — Админ-панель</title>
+    <meta name="description" content="Панель управления Business Assistant GO">
+    <base href="/admin/panel/">
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="app-container">
+        <!-- ===== SIDEBAR ===== -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-logo">
+                    <div class="sidebar-logo-icon">🚀</div>
+                    <div>
+                        <div class="sidebar-logo-text">Jardamchy GO</div>
+                        <div class="sidebar-logo-sub">Админ-панель</div>
+                    </div>
+                </div>
+            </div>
+            <nav class="sidebar-nav">
+                <div class="nav-section-title">Главное</div>
+                <div class="nav-item active" data-section="dashboard">
+                    <span class="nav-item-icon">📊</span> Дашборд
+                </div>
+                <div class="nav-item" data-section="orders">
+                    <span class="nav-item-icon">📋</span> Заказы
+                    <span class="nav-item-badge" id="nav-orders-badge">0</span>
+                </div>
+
+                <div class="nav-section-title">Исполнители</div>
+                <div class="nav-item" data-section="drivers">
+                    <span class="nav-item-icon">🚖</span> Водители
+                </div>
+                <div class="nav-item" data-section="cafes">
+                    <span class="nav-item-icon">🍔</span> Кафе
+                </div>
+                <div class="nav-item" data-section="menu">
+                    <span class="nav-item-icon">🍽️</span> Меню
+                </div>
+                <div class="nav-item" data-section="pharmacies">
+                    <span class="nav-item-icon">💊</span> Аптеки
+                </div>
+                <div class="nav-item" data-section="shoppers">
+                    <span class="nav-item-icon">🛒</span> Закупщики
+                </div>
+
+                <div class="nav-section-title">Аналитика</div>
+                <div class="nav-item" data-section="stats">
+                    <span class="nav-item-icon">📈</span> Статистика
+                </div>
+                <div class="nav-item" data-section="transactions">
+                    <span class="nav-item-icon">💰</span> Транзакции
+                </div>
+
+                <div class="nav-section-title">Система</div>
+                <div class="nav-item" data-section="users">
+                    <span class="nav-item-icon">👥</span> Пользователи
+                </div>
+                <div class="nav-item" data-section="broadcast">
+                    <span class="nav-item-icon">📢</span> Рассылка
+                </div>
+                <div class="nav-item" data-section="settings">
+                    <span class="nav-item-icon">⚙️</span> Настройки
+                </div>
+            </nav>
+        </aside>
+
+        <!-- ===== MAIN CONTENT ===== -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="header">
+                <h1 class="header-title" id="header-title">📊 Дашборд</h1>
+                <div class="header-actions">
+                    <span class="header-time" id="header-time"></span>
+                    <span class="header-status">
+                        <span class="header-status-dot"></span>
+                        Онлайн
+                    </span>
+                </div>
+            </header>
+
+            <!-- Page Content -->
+            <div class="page-content">
+
+                <!-- ====== DASHBOARD ====== -->
+                <div class="section active" id="sec-dashboard">
+                    <div class="kpi-grid" id="kpi-grid"></div>
+
+                    <div class="grid-2">
+                        <div class="chart-container">
+                            <div class="chart-title">📈 Заказы за неделю</div>
+                            <div class="bar-chart" id="chart-weekly"></div>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-title">🍩 По типам услуг</div>
+                            <div class="donut-chart" id="chart-services"></div>
+                        </div>
+                    </div>
+
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">🕐 Последние заказы</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Услуга</th>
+                                        <th>Статус</th>
+                                        <th>Клиент</th>
+                                        <th>Сумма</th>
+                                        <th>Дата</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dashboard-orders-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== ORDERS ====== -->
+                <div class="section" id="sec-orders">
+                    <div class="filters-bar">
+                        <div class="filter-group">
+                            <span class="filter-label">Статус:</span>
+                            <select id="filter-order-status">
+                                <option value="">Все</option>
+                                <option value="PENDING">Ожидает</option>
+                                <option value="ACCEPTED">Принят</option>
+                                <option value="IN_DELIVERY">В доставке</option>
+                                <option value="COMPLETED">Завершён</option>
+                                <option value="CANCELLED">Отменён</option>
+                                <option value="URGENT">Срочный</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <span class="filter-label">Услуга:</span>
+                            <select id="filter-order-service">
+                                <option value="">Все</option>
+                                <option value="taxi">🚖 Такси</option>
+                                <option value="cafe">🍔 Кафе</option>
+                                <option value="porter">🚛 Портер</option>
+                                <option value="ant">🐜 Муравей</option>
+                                <option value="pharmacy">💊 Аптека</option>
+                                <option value="shop">🛒 Магазин</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <span class="filter-label">Период:</span>
+                            <select id="filter-order-period">
+                                <option value="all">Всё время</option>
+                                <option value="day">Сегодня</option>
+                                <option value="week">Неделя</option>
+                                <option value="month">Месяц</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="loadOrders()">🔍 Найти</button>
+                    </div>
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">📋 Заказы</div>
+                            <span id="orders-total-label" style="color:var(--text-muted);font-size:12px;"></span>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Услуга</th>
+                                        <th>Статус</th>
+                                        <th>Клиент</th>
+                                        <th>Адрес</th>
+                                        <th>Детали</th>
+                                        <th>Сумма</th>
+                                        <th>Водитель</th>
+                                        <th>Дата</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="orders-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== DRIVERS ====== -->
+                <div class="section" id="sec-drivers">
+                    <div class="filters-bar">
+                        <div class="filter-group">
+                            <span class="filter-label">Тип:</span>
+                            <select id="filter-driver-type" onchange="loadDrivers()">
+                                <option value="">Все</option>
+                                <option value="taxi">🚖 Такси</option>
+                                <option value="porter">🚛 Портер</option>
+                                <option value="ant">🐜 Муравей</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="showAddDriverModal()">➕ Добавить
+                            водителя</button>
+                    </div>
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">🚖 Водители (такси, портер, муравей)</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Имя</th>
+                                        <th>Тип</th>
+                                        <th>Telegram ID</th>
+                                        <th>Телефон</th>
+                                        <th>Авто</th>
+                                        <th>Гос. номер</th>
+                                        <th>Баланс</th>
+                                        <th>Заказов</th>
+                                        <th>Статус</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="drivers-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== CAFES ====== -->
+                <div class="section" id="sec-cafes">
+                    <div class="filters-bar">
+                        <button class="btn btn-primary btn-sm" onclick="showAddCafeModal()">➕ Добавить кафе</button>
+                    </div>
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">🍔 Кафе</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Название</th>
+                                        <th>Telegram ID</th>
+                                        <th>Телефон</th>
+                                        <th>Адрес</th>
+                                        <th>Долг</th>
+                                        <th>Комиссия</th>
+                                        <th>Статус</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="cafes-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== MENU ====== -->
+                <div class="section" id="sec-menu">
+                    <div class="filters-bar">
+                        <div class="filter-group">
+                            <span class="filter-label">Кафе:</span>
+                            <select id="menu-cafe-select" onchange="handleMenuCafeChange()">
+                                <option value="">Выберите кафе</option>
+                            </select>
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="showAddMenuItemModal()">➕ Добавить
+                            блюдо</button>
+                    </div>
+                    <div class="card-subheader" id="menu-categories-panel">
+                        <div class="filter-group" style="flex-wrap:wrap;gap:8px;">
+                            <span class="filter-label">Категории:</span>
+                            <div id="menu-categories-list" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                <input type="text" id="add-category-name" placeholder="Новая категория" style="width:180px;">
+                                <button class="btn btn-ghost btn-sm" onclick="submitAddCategory()">Добавить</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">🍽️ Меню кафе</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Название</th>
+                                        <th>Цена</th>
+                                        <th>Категория</th>
+                                        <th>Описание</th>
+                                        <th>Доступность</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="menu-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== PHARMACIES ====== -->
+                <div class="section" id="sec-pharmacies">
+                    <div class="filters-bar">
+                        <button class="btn btn-primary btn-sm" onclick="showAddPharmacyModal()">➕ Добавить
+                            аптеку</button>
+                    </div>
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">💊 Аптеки</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Название</th>
+                                        <th>Telegram ID</th>
+                                        <th>Телефон</th>
+                                        <th>Адрес</th>
+                                        <th>Баланс</th>
+                                        <th>Статус</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pharmacies-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== SHOPPERS ====== -->
+                <div class="section" id="sec-shoppers">
+                    <div class="filters-bar">
+                        <button class="btn btn-primary btn-sm" onclick="showAddShopperModal()">➕ Добавить
+                            закупщика</button>
+                    </div>
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">🛒 Закупщики</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Имя</th>
+                                        <th>Telegram ID</th>
+                                        <th>Телефон</th>
+                                        <th>Баланс</th>
+                                        <th>Статус</th>
+                                        <th>Действия</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="shoppers-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== STATISTICS ====== -->
+                <div class="section" id="sec-stats">
+                    <div class="period-tabs" id="stats-period-tabs">
+                        <button class="period-tab active" data-period="day"
+                            onclick="selectStatsPeriod('day')">Сегодня</button>
+                        <button class="period-tab" data-period="week"
+                            onclick="selectStatsPeriod('week')">Неделя</button>
+                        <button class="period-tab" data-period="month"
+                            onclick="selectStatsPeriod('month')">Месяц</button>
+                        <button class="period-tab" data-period="all" onclick="selectStatsPeriod('all')">Всё
+                            время</button>
+                    </div>
+                    <div class="kpi-grid" id="stats-kpi"></div>
+
+                    <div class="grid-2">
+                        <div class="chart-container">
+                            <div class="chart-title">📊 Заказы по типам</div>
+                            <div id="stats-service-bars" class="bar-chart"></div>
+                        </div>
+                        <div class="chart-container">
+                            <div class="chart-title">💰 Выручка по типам</div>
+                            <div id="stats-revenue-bars" class="bar-chart"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== TRANSACTIONS ====== -->
+                <div class="section" id="sec-transactions">
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">💰 Транзакции</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Действие</th>
+                                        <th>Пользователь</th>
+                                        <th>Заказ</th>
+                                        <th>Сумма</th>
+                                        <th>Детали</th>
+                                        <th>Дата</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="transactions-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== USERS ====== -->
+                <div class="section" id="sec-users">
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">👥 Пользователи WhatsApp</div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Телефон</th>
+                                        <th>Имя</th>
+                                        <th>Язык</th>
+                                        <th>Состояние</th>
+                                        <th>Заказов</th>
+                                        <th>Зарегистрирован</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="users-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== BROADCAST ====== -->
+                <div class="section" id="sec-broadcast">
+                    <div class="table-container">
+                        <div class="table-header">
+                            <div class="table-title">📢 Рассылка сообщений</div>
+                        </div>
+                        <div style="padding:24px;">
+                            <div class="form-group">
+                                <label>Получатели</label>
+                                <div class="checkbox-group" id="broadcast-targets">
+                                    <div
+                                        style="width:100%;margin:8px 0 4px 0;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;">
+                                        📢 Telegram Группы</div>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="group_taxi"> 🚖 Такси
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="group_porter"> 🚛 Портер (+ Муравей)
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="group_cafe"> 🍔 Кафе
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="group_pharmacy"> 💊 Аптеки
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="group_shop"> 🛒 Магазины
+                                    </label>
+
+                                    <div
+                                        style="width:100%;margin:12px 0 4px 0;font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;">
+                                        👤 Личные сообщения (Бот)</div>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="drivers"> 🚖 Водители
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="cafes"> 🍔 Кафе
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="pharmacies"> 💊 Аптеки
+                                    </label>
+                                    <label class="checkbox-label">
+                                        <input type="checkbox" value="shoppers"> 🛒 Закупщики
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Сообщение</label>
+                                <textarea id="broadcast-message" rows="5"
+                                    placeholder="Введите текст сообщения..."></textarea>
+                            </div>
+                            <button class="btn btn-primary" onclick="sendBroadcast()">📤 Отправить рассылку</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ====== SETTINGS ====== -->
+                <div class="section" id="sec-settings">
+                    <div class="kpi-grid">
+                        <div class="kpi-card">
+                            <div class="kpi-header">
+                                <span class="kpi-label">Режим Рамазан</span>
+                                <span class="kpi-icon">🌙</span>
+                            </div>
+                            <div class="kpi-value" id="setting-ramadan">—</div>
+                            <button class="btn btn-ghost btn-sm" onclick="toggleRamadan()"
+                                id="btn-ramadan">Переключить</button>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-header">
+                                <span class="kpi-label">Комиссия кафе</span>
+                                <span class="kpi-icon">🍔</span>
+                            </div>
+                            <div class="kpi-value" id="setting-cafe-comm">—</div>
+                            <div class="kpi-sub">% от суммы заказа</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-header">
+                                <span class="kpi-label">Комиссия такси</span>
+                                <span class="kpi-icon">🚖</span>
+                            </div>
+                            <div class="kpi-value" id="setting-taxi-comm">—</div>
+                            <div class="kpi-sub">сом за заказ</div>
+                        </div>
+                        <div class="kpi-card">
+                            <div class="kpi-header">
+                                <span class="kpi-label">Комиссия портер</span>
+                                <span class="kpi-icon">🚛</span>
+                            </div>
+                            <div class="kpi-value" id="setting-porter-comm">—</div>
+                            <div class="kpi-sub">сом за заказ</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- ===== MODALS ===== -->
+
+    <!-- Universal Balance Top-Up Modal -->
+    <div class="modal-overlay" id="modal-balance">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title" id="balance-modal-title">💰 Пополнение баланса</h3>
+                <button class="modal-close" onclick="closeModal('modal-balance')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label id="balance-entity-label">Водитель</label>
+                    <input type="text" id="balance-entity-name" disabled>
+                </div>
+                <input type="hidden" id="balance-entity-id">
+                <input type="hidden" id="balance-entity-type">
+                <div class="form-group">
+                    <label>Текущий баланс</label>
+                    <input type="text" id="balance-current" disabled>
+                </div>
+                <div class="form-group">
+                    <label>Сумма (сом, отрицательная — списание)</label>
+                    <input type="number" id="balance-amount" placeholder="Введите сумму" value="100">
+                </div>
+                <div class="form-group">
+                    <label>Причина</label>
+                    <input type="text" id="balance-reason" placeholder="Пополнение через админку"
+                        value="Пополнение через админку">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-balance')">Отмена</button>
+                <button class="btn btn-danger btn-sm" onclick="submitBalanceWithSign(-1)" style="margin-right:auto;">➖
+                    Списать</button>
+                <button class="btn btn-success" onclick="submitBalanceWithSign(1)">💰 Пополнить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Driver Modal -->
+    <div class="modal-overlay" id="modal-add-driver">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">➕ Добавить водителя</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-driver')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Telegram ID *</label>
+                    <input type="text" id="add-driver-tg-id" placeholder="123456789">
+                </div>
+                <div class="form-group">
+                    <label>ФИО *</label>
+                    <input type="text" id="add-driver-name" placeholder="Иванов Иван">
+                </div>
+                <div class="form-group">
+                    <label>Тип</label>
+                    <select id="add-driver-type">
+                        <option value="taxi">🚖 Такси</option>
+                        <option value="porter">🚛 Портер</option>
+                        <option value="ant">🐜 Муравей</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Телефон</label>
+                    <input type="text" id="add-driver-phone" placeholder="0555123456">
+                </div>
+                <div class="form-group">
+                    <label>Марка авто</label>
+                    <input type="text" id="add-driver-car" placeholder="Toyota Camry">
+                </div>
+                <div class="form-group">
+                    <label>Гос. номер</label>
+                    <input type="text" id="add-driver-plate" placeholder="04 123 AA">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-add-driver')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitAddDriver()">Добавить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Driver Modal -->
+    <div class="modal-overlay" id="modal-edit-driver">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">✏️ Редактировать водителя</h3>
+                <button class="modal-close" onclick="closeModal('modal-edit-driver')">✕</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-driver-id">
+                <div class="form-group">
+                    <label>ФИО</label>
+                    <input type="text" id="edit-driver-name" placeholder="Иванов Иван">
+                </div>
+                <div class="form-group">
+                    <label>Телефон</label>
+                    <input type="text" id="edit-driver-phone" placeholder="0555123456">
+                </div>
+                <div class="form-group">
+                    <label>Марка авто</label>
+                    <input type="text" id="edit-driver-car" placeholder="Toyota Camry">
+                </div>
+                <div class="form-group">
+                    <label>Гос. номер</label>
+                    <input type="text" id="edit-driver-plate" placeholder="04 123 AA">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-edit-driver')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitEditDriver()">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Cafe Modal -->
+    <div class="modal-overlay" id="modal-add-cafe">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">➕ Добавить кафе</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-cafe')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Telegram ID *</label>
+                    <input type="text" id="add-cafe-tg-id" placeholder="123456789">
+                </div>
+                <div class="form-group">
+                    <label>Название *</label>
+                    <input type="text" id="add-cafe-name" placeholder="Кафе Жардамчы">
+                </div>
+                <div class="form-group">
+                    <label>Телефон</label>
+                    <input type="text" id="add-cafe-phone" placeholder="0555123456">
+                </div>
+                <div class="form-group">
+                    <label>Адрес</label>
+                    <input type="text" id="add-cafe-address" placeholder="ул. Ленина 25">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-add-cafe')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitAddCafe()">Добавить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Menu Item Modal -->
+    <div class="modal-overlay" id="modal-add-item">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">➕ Добавить блюдо</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-item')">✕</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="add-item-cafe-id">
+                <div class="form-group">
+                    <label>Название *</label>
+                    <input type="text" id="add-item-name" placeholder="Шаурма классическая">
+                </div>
+                <div class="form-group">
+                    <label>Цена (сом) *</label>
+                    <input type="number" id="add-item-price" placeholder="150">
+                </div>
+                <div class="form-group">
+                    <label>Категория</label>
+                    <select id="add-item-category"></select>
+                </div>
+                <div class="form-group">
+                    <label>Описание</label>
+                    <textarea id="add-item-description" rows="3" placeholder="Краткое описание блюда"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>📷 Фото блюда</label>
+                    <div style="display:flex;gap:8px;margin-bottom:8px;">
+                        <button type="button" class="btn btn-ghost btn-sm" id="add-photo-tab-url"
+                            onclick="switchPhotoTab('add','url')" style="flex:1;">🔗 По ссылке</button>
+                        <button type="button" class="btn btn-ghost btn-sm" id="add-photo-tab-file"
+                            onclick="switchPhotoTab('add','file')" style="flex:1;">📁 С компьютера</button>
+                    </div>
+                    <div id="add-photo-url-block">
+                        <input type="text" id="add-item-image-url" placeholder="https://example.com/photo.jpg"
+                            oninput="previewImageUrl('add')">
+                    </div>
+                    <div id="add-photo-file-block" style="display:none;">
+                        <input type="file" id="add-item-image-file" accept="image/*" onchange="previewImageFile('add')">
+                    </div>
+                    <div id="add-image-preview" style="margin-top:8px;text-align:center;display:none;">
+                        <img id="add-preview-img"
+                            style="max-width:100%;max-height:160px;border-radius:8px;border:1px solid var(--border);">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-add-item')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitAddMenuItem()">Добавить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Menu Item Modal -->
+    <div class="modal-overlay" id="modal-edit-item">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">✏️ Редактировать блюдо</h3>
+                <button class="modal-close" onclick="closeModal('modal-edit-item')">✕</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="edit-item-id">
+                <div class="form-group">
+                    <label>Название *</label>
+                    <input type="text" id="edit-item-name" placeholder="Шаурма классическая">
+                </div>
+                <div class="form-group">
+                    <label>Цена (сом) *</label>
+                    <input type="number" id="edit-item-price" placeholder="150">
+                </div>
+                <div class="form-group">
+                    <label>Категория</label>
+                    <select id="edit-item-category"></select>
+                </div>
+                <div class="form-group">
+                    <label>Описание</label>
+                    <textarea id="edit-item-description" rows="3" placeholder="Краткое описание блюда"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Доступность</label>
+                    <select id="edit-item-available">
+                        <option value="true">✅ Доступно</option>
+                        <option value="false">❌ Недоступно</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>📷 Фото блюда</label>
+                    <div style="display:flex;gap:8px;margin-bottom:8px;">
+                        <button type="button" class="btn btn-ghost btn-sm" id="edit-photo-tab-url"
+                            onclick="switchPhotoTab('edit','url')" style="flex:1;">🔗 По ссылке</button>
+                        <button type="button" class="btn btn-ghost btn-sm" id="edit-photo-tab-file"
+                            onclick="switchPhotoTab('edit','file')" style="flex:1;">📁 С компьютера</button>
+                    </div>
+                    <div id="edit-photo-url-block">
+                        <input type="text" id="edit-item-image-url" placeholder="https://example.com/photo.jpg"
+                            oninput="previewImageUrl('edit')">
+                    </div>
+                    <div id="edit-photo-file-block" style="display:none;">
+                        <input type="file" id="edit-item-image-file" accept="image/*"
+                            onchange="previewImageFile('edit')">
+                    </div>
+                    <div id="edit-image-preview" style="margin-top:8px;text-align:center;display:none;">
+                        <img id="edit-preview-img"
+                            style="max-width:100%;max-height:160px;border-radius:8px;border:1px solid var(--border);">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-edit-item')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitEditMenuItem()">💾 Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Pharmacy Modal -->
+    <div class="modal-overlay" id="modal-add-pharmacy">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">➕ Добавить аптеку</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-pharmacy')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Telegram ID *</label>
+                    <input type="text" id="add-pharmacy-tg-id" placeholder="123456789">
+                </div>
+                <div class="form-group">
+                    <label>Название *</label>
+                    <input type="text" id="add-pharmacy-name" placeholder="Аптека Здоровье">
+                </div>
+                <div class="form-group">
+                    <label>Телефон</label>
+                    <input type="text" id="add-pharmacy-phone" placeholder="0555123456">
+                </div>
+                <div class="form-group">
+                    <label>Адрес</label>
+                    <input type="text" id="add-pharmacy-address" placeholder="ул. Манаса 10">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-add-pharmacy')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitAddPharmacy()">Добавить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Shopper Modal -->
+    <div class="modal-overlay" id="modal-add-shopper">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">➕ Добавить закупщика</h3>
+                <button class="modal-close" onclick="closeModal('modal-add-shopper')">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Telegram ID *</label>
+                    <input type="text" id="add-shopper-tg-id" placeholder="123456789">
+                </div>
+                <div class="form-group">
+                    <label>ФИО *</label>
+                    <input type="text" id="add-shopper-name" placeholder="Иванов Иван">
+                </div>
+                <div class="form-group">
+                    <label>Телефон</label>
+                    <input type="text" id="add-shopper-phone" placeholder="0555123456">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-ghost" onclick="closeModal('modal-add-shopper')">Отмена</button>
+                <button class="btn btn-primary" onclick="submitAddShopper()">Добавить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
