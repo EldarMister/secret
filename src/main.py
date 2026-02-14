@@ -38,8 +38,13 @@ STRICTLY_VAGUE = {
 # "дом" = vague, но "дом 5" = ok
 MAYBE_VAGUE = {"дом", "уй", "үй", "квартира", "кв"}
 
-# Слова отмены заказа
-CANCEL_WORDS = {"отмена", "отменить", "cancel", "стоп", "stop", "жок", "токтот", "баш тарт", "отказ"}
+# Слова отмены заказа (включая опечатки и варианты на кыргызском)
+CANCEL_WORDS = {
+    "отмена", "отменить", "отказ", "cancel", "стоп", "stop",
+    "жок", "токтот", "баш тарт",
+    "атмина", "атмин", "одмена", "кайтуу"
+}
+CANCEL_PREFIXES = ("отмен", "атмин", "атмина", "одмен", "артка", "кайт")
 
 def _is_vague_address(address: str) -> bool:
     """Проверяет, является ли адрес слишком общим (дом, уйго, үйгө и т.д.)"""
@@ -58,14 +63,41 @@ def _is_vague_address(address: str) -> bool:
 def _is_cancellation(message: str) -> bool:
     """Проверяет, хочет ли пользователь отменить заказ"""
     msg_lower = message.lower().strip()
+    if not msg_lower:
+        return False
+
     # Точное совпадение
     if msg_lower in CANCEL_WORDS:
         return True
+
     # Если первое слово — отмена
     first_word = msg_lower.split()[0] if msg_lower else ""
     if first_word in CANCEL_WORDS:
         return True
+
+    # По префиксу ловим формы вроде "отмен...", "кайт...", "артка..."
+    if any(msg_lower.startswith(prefix) for prefix in CANCEL_PREFIXES):
+        return True
+    if any(first_word.startswith(prefix) for prefix in CANCEL_PREFIXES):
+        return True
+
     return False
+
+
+def _normalize_address(address: str) -> str:
+    """Нормализовать адрес для сравнения."""
+    if not address:
+        return ""
+    normalized = re.sub(r"\s+", " ", address.lower().strip())
+    normalized = re.sub(r"[^\w\s\-а-яё]", "", normalized, flags=re.IGNORECASE)
+    return normalized
+
+
+def _addresses_equal(addr1: str, addr2: str) -> bool:
+    """Проверка адресов на равенство после нормализации."""
+    n1 = _normalize_address(addr1)
+    n2 = _normalize_address(addr2)
+    return bool(n1) and n1 == n2
 
 
 def _cancel_order_in_group(order_id: str, service_type: str, db, text: str) -> None:
@@ -286,10 +318,25 @@ def handle_whatsapp():
 def handle_idle_state(user: User, message: str, db) -> tuple:
     """Обработка состояния ожидания — ИИ определяет намерение"""
     msg_lower = message.lower()
+    msg_trim = message.strip()
+    first_token = msg_trim.split()[0] if msg_trim else ""
+    first_token_digits = "".join(ch for ch in first_token if ch.isdigit())
+
+    service_intent_by_number = {
+        "1": "cafe",
+        "2": "shop",
+        "3": "pharmacy",
+        "4": "taxi",
+        "5": "porter",
+        "6": "ant",
+    }
 
     # Жёсткая проверка на «меню» / запрос еды, чтобы не путать с доставкой
     menu_keywords = ["меню", "мену", "мэню", "менью", "менйу", "миню", "менюу", "menu", "меню керек", "мага меню"]
-    if any(k in msg_lower for k in menu_keywords):
+    selected_intent = service_intent_by_number.get(msg_trim) or service_intent_by_number.get(first_token_digits)
+    if selected_intent:
+        nlu_result = {"intent": selected_intent, "from_address": None, "to_address": None, "order_details": None, "cargo_type": None}
+    elif any(k in msg_lower for k in menu_keywords):
         nlu_result = {"intent": "cafe", "from_address": None, "to_address": None, "order_details": None, "cargo_type": None}
     else:
         # Используем ИИ для определения намерения
@@ -352,6 +399,8 @@ def handle_idle_state(user: User, message: str, db) -> tuple:
             send_whatsapp(user.phone, price_choice_msg)
         else:
             # Адреса не указаны — спрашиваем
+            user.set_temp_data('taxi_from', '')
+            user.set_temp_data('taxi_to', '')
             user.set_state(config.STATE_TAXI_ROUTE)
             send_whatsapp(user.phone, config.TAXI_PROMPT)
         
@@ -972,50 +1021,125 @@ def handle_pharmacy_request(user: User, message: str, media_url: str, db) -> tup
 # =============================================================================
 
 def handle_taxi_route(user: User, message: str, db) -> tuple:
-    """Обработка маршрута такси — ИИ извлекает адреса"""
-    
-    # Используем ИИ для извлечения адресов из произвольного текста
-    nlu_result = parse_user_message(message)
-    
-    from_addr = nlu_result.get("from_address")
-    to_addr = nlu_result.get("to_address")
-    
-    if from_addr and to_addr:
-        # Проверка на слишком общий адрес
-        if _is_vague_address(from_addr) or _is_vague_address(to_addr):
-            send_whatsapp(user.phone, config.VAGUE_ADDRESS_PROMPT)
-            return jsonify({"status": "ok"}), 200
-        
+    """Обработка маршрута такси: собираем откуда/куда до полной информации."""
+    msg = message.strip()
+    if not msg:
+        send_whatsapp(user.phone, config.TAXI_PROMPT)
+        return jsonify({"status": "ok"}), 200
+
+    nlu_result = parse_user_message(msg)
+    parsed_from = (nlu_result.get("from_address") or "").strip()
+    parsed_to = (nlu_result.get("to_address") or "").strip()
+
+    # Fallback: если пользователь написал маршрут через дефис
+    if not parsed_from and not parsed_to:
+        dash_split = re.split(r"\s*[—-]\s*", msg, maxsplit=1)
+        if len(dash_split) == 2 and dash_split[0].strip() and dash_split[1].strip():
+            parsed_from = dash_split[0].strip()
+            parsed_to = dash_split[1].strip()
+
+    current_from = (user.get_temp_data('taxi_from', '') or "").strip()
+    current_to = (user.get_temp_data('taxi_to', '') or "").strip()
+
+    def _ask_for_to():
+        send_whatsapp(
+            user.phone,
+            "📍 *Куда ехать? / Кайда барабыз?*\n\n"
+            "Напишите конечный адрес (куда поедем).\n"
+            "Акыркы даректи жазыңыз (кайда барабыз)."
+        )
+
+    def _ask_for_from():
+        send_whatsapp(
+            user.phone,
+            "📍 *Откуда ехать? / Кайдан барабыз?*\n\n"
+            "Напишите адрес подачи (где вас забрать).\n"
+            "Баштапкы даректи жазыңыз (кайдан алабыз)."
+        )
+
+    def _go_to_price_choice(from_address: str, to_address: str):
         user.set_temp_data('service_type', config.SERVICE_TAXI)
-        user.set_temp_data('taxi_from', from_addr)
-        user.set_temp_data('taxi_to', to_addr)
-        user.set_temp_data('taxi_route', f"{from_addr} — {to_addr}")
+        user.set_temp_data('taxi_from', from_address)
+        user.set_temp_data('taxi_to', to_address)
+        user.set_temp_data('taxi_route', f"{from_address} — {to_address}")
         user.set_state(config.STATE_TAXI_PRICE_CHOICE)
-        
+
         price_choice_msg = config.TAXI_PRICE_CHOICE_PROMPT.format(
-            from_address=from_addr,
-            to_address=to_addr
+            from_address=from_address,
+            to_address=to_address
         )
         send_whatsapp(user.phone, price_choice_msg)
-    else:
-        # Не удалось извлечь — проверяем на общий адрес
-        if _is_vague_address(message):
+        return jsonify({"status": "ok"}), 200
+
+    # Если сразу извлекли оба адреса
+    if parsed_from and parsed_to:
+        if _is_vague_address(parsed_from) or _is_vague_address(parsed_to):
             send_whatsapp(user.phone, config.VAGUE_ADDRESS_PROMPT)
             return jsonify({"status": "ok"}), 200
-        
+        if _addresses_equal(parsed_from, parsed_to):
+            send_whatsapp(
+                user.phone,
+                "⚠️ Адрес *откуда* и *куда* получился одинаковым.\n"
+                "Напишите маршрут точнее: *Откуда* и *Куда* отдельно."
+            )
+            return jsonify({"status": "ok"}), 200
+        return _go_to_price_choice(parsed_from, parsed_to)
+
+    # Пошаговый сбор недостающего адреса
+    if not current_from and not current_to:
+        single_addr = parsed_from or parsed_to or msg
+        if _is_vague_address(single_addr):
+            send_whatsapp(user.phone, config.VAGUE_ADDRESS_PROMPT)
+            return jsonify({"status": "ok"}), 200
+
+        # Если ИИ нашёл только "куда", то сначала просим "откуда"
+        if parsed_to and not parsed_from:
+            user.set_temp_data('service_type', config.SERVICE_TAXI)
+            user.set_temp_data('taxi_to', single_addr)
+            _ask_for_from()
+            return jsonify({"status": "ok"}), 200
+
         user.set_temp_data('service_type', config.SERVICE_TAXI)
-        user.set_temp_data('taxi_from', message)
-        user.set_temp_data('taxi_to', message)
-        user.set_temp_data('taxi_route', message)
-        user.set_state(config.STATE_TAXI_PRICE_CHOICE)
-        
-        price_choice_msg = config.TAXI_PRICE_CHOICE_PROMPT.format(
-            from_address=message,
-            to_address=message
+        user.set_temp_data('taxi_from', single_addr)
+        _ask_for_to()
+        return jsonify({"status": "ok"}), 200
+
+    if current_from and not current_to:
+        to_addr = parsed_to or parsed_from or msg
+        if _is_vague_address(to_addr):
+            send_whatsapp(user.phone, config.VAGUE_ADDRESS_PROMPT)
+            return jsonify({"status": "ok"}), 200
+        if _addresses_equal(current_from, to_addr):
+            send_whatsapp(
+                user.phone,
+                "⚠️ Адрес назначения совпадает с адресом подачи.\n"
+                "Напишите другой адрес *КУДА*."
+            )
+            return jsonify({"status": "ok"}), 200
+        return _go_to_price_choice(current_from, to_addr)
+
+    if current_to and not current_from:
+        from_addr = parsed_from or parsed_to or msg
+        if _is_vague_address(from_addr):
+            send_whatsapp(user.phone, config.VAGUE_ADDRESS_PROMPT)
+            return jsonify({"status": "ok"}), 200
+        if _addresses_equal(from_addr, current_to):
+            send_whatsapp(
+                user.phone,
+                "⚠️ Адрес подачи совпадает с адресом назначения.\n"
+                "Напишите другой адрес *ОТКУДА*."
+            )
+            return jsonify({"status": "ok"}), 200
+        return _go_to_price_choice(from_addr, current_to)
+
+    if _addresses_equal(current_from, current_to):
+        send_whatsapp(
+            user.phone,
+            "⚠️ Адреса сейчас одинаковые. Напишите маршрут заново: *Откуда* и *Куда*."
         )
-        send_whatsapp(user.phone, price_choice_msg)
-    
-    return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "ok"}), 200
+
+    return _go_to_price_choice(current_from, current_to)
 
 
 def handle_taxi_price_choice(user: User, message: str, db) -> tuple:
