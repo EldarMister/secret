@@ -22,6 +22,35 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# DRIVER PROFILE HELPERS
+# =============================================================================
+
+def _normalize_driver_profile(driver, fallback_name: str = "") -> dict:
+    """Normalize driver profile data from DB with safe fallbacks."""
+    def _clean(value):
+        return (value or "").strip()
+
+    name = _clean(driver.get('name') if driver else "")
+    if not name:
+        name = _clean(fallback_name)
+    if not name:
+        name = "—"
+
+    phone_raw = _clean(driver.get('phone') if driver else "")
+    phone = format_phone(phone_raw) if phone_raw else "—"
+
+    car_model = _clean(driver.get('car_model') if driver else "") or "—"
+    plate = _clean(driver.get('plate') if driver else "") or "—"
+
+    return {
+        "name": name,
+        "phone": phone,
+        "car_model": car_model,
+        "plate": plate,
+    }
+
+
+# =============================================================================
 # TELEGRAM WEBHOOK HANDLER
 # =============================================================================
 
@@ -585,15 +614,11 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
         )
         commission_msg = f"\n💰 Списано комиссии: {commission} сом\n💳 Новый баланс: {new_balance} сом"
         
-        driver_name = (driver.get('name') if driver else None)
-        driver_name = (driver_name or "").strip() or user_name
-        driver_phone_raw = (driver.get('phone') if driver else None)
-        driver_phone_raw = (driver_phone_raw or "").strip()
-        driver_phone = format_phone(driver_phone_raw) if driver_phone_raw else 'Не указан'
-        driver_car = (driver.get('car_model') if driver else None)
-        driver_car = (driver_car or "").strip() or 'Не указана'
-        driver_plate = (driver.get('plate') if driver else None)
-        driver_plate = (driver_plate or "").strip() or 'Не указан'
+        profile = _normalize_driver_profile(driver, user_name)
+        driver_name = profile["name"]
+        driver_phone = profile["phone"]
+        driver_car = profile["car_model"]
+        driver_plate = profile["plate"]
 
         # Сообщаем клиенту
         driver_msg = f"""✅ *Машина найдена и выехала!*
@@ -687,15 +712,11 @@ def handle_taxi_arrived(data: str, user_id: str, user_name: str,
             return jsonify({"status": "ok"}), 200
 
         driver = db.get_driver(user_id)
-        driver_name = (driver.get('name') if driver else None)
-        driver_name = (driver_name or "").strip() or user_name
-        driver_phone_raw = (driver.get('phone') if driver else None)
-        driver_phone_raw = (driver_phone_raw or "").strip()
-        driver_phone = format_phone(driver_phone_raw) if driver_phone_raw else 'Не указан'
-        driver_car = (driver.get('car_model') if driver else None)
-        driver_car = (driver_car or "").strip() or 'Не указана'
-        driver_plate = (driver.get('plate') if driver else None)
-        driver_plate = (driver_plate or "").strip() or 'Не указан'
+        profile = _normalize_driver_profile(driver, user_name)
+        driver_name = profile["name"]
+        driver_phone = profile["phone"]
+        driver_car = profile["car_model"]
+        driver_plate = profile["plate"]
         car_info = f"\n🚘 *{driver_car}* | {driver_plate}"
 
         client_msg = (
@@ -876,13 +897,14 @@ def handle_porter_take(data: str, user_id: str, user_name: str,
         # Получаем заказ
         order = db.get_order(order_id)
         
+        profile = _normalize_driver_profile(driver, user_name)
         # Сообщаем клиенту
         client_msg = f"""✅ *Водитель найден!*
 
-🚛 *Транспорт:* {driver.get('car_model', 'Портер/Муравей')}
-👤 *Водитель:* {driver.get('name', user_name)}
-📞 *Телефон:* {driver.get('phone', 'Не указан')}
-🔢 *Номер:* {driver.get('plate', 'Не указан')}
+🚛 *Транспорт:* {profile["car_model"]}
+👤 *Водитель:* {profile["name"]}
+📞 *Телефон:* {profile["phone"]}
+🔢 *Номер:* {profile["plate"]}
 
 💰 Цена: *Договорная*
 
@@ -1151,9 +1173,7 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
             db.add_driver(user_id, user_name)
             driver = db.get_driver(user_id)
         
-        driver_name = driver.get('name') or user_name
-        driver_phone = driver.get('phone') or 'Не указан'
-        driver_plate = driver.get('plate') or 'Не указан'
+        profile = _normalize_driver_profile(driver, user_name)
         
         # Обновляем статус
         db.update_order_status(order_id, config.ORDER_STATUS_IN_DELIVERY, driver_id=user_id)
@@ -1161,22 +1181,85 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
         # Сообщаем клиенту
         client_msg = f"""✅ *Курьер найден!*
 
-🚖 *Водитель:* {driver_name}
-📞 *Телефон:* {driver_phone}
-🔢 *Номер:* {driver_plate}
+👤 *Водитель:* {profile["name"]}
+📞 *Телефон:* {profile["phone"]}
+🚘 *Авто:* {profile["car_model"]}
+🔢 *Номер:* {profile["plate"]}
 
 ⏱ Ожидайте доставку."""
         
         send_whatsapp(order.get('client_phone', ''), client_msg)
         
+        # Получаем информацию о провайдере (откуда забирать)
+        provider_name = "Неизвестно"
+        provider_address = "Проверьте детали"
+        provider_phone = ""
+        ready_time_str = ""
+        
+        provider_id = order.get('provider_id')
+        if provider_id:
+            if service_type == config.SERVICE_CAFE:
+                cafe = db.get_cafe(provider_id)
+                if cafe:
+                    provider_name = cafe.get('name', 'Кафе')
+                    provider_address = cafe.get('address', 'Адрес не указан')
+                    provider_phone = cafe.get('phone', '')
+                
+                # Время готовности
+                ready_time = order.get('ready_time')
+                if ready_time:
+                    ready_time_str = f"⏱ *Готово через:* {ready_time} мин\n"
+                    
+            elif service_type == config.SERVICE_SHOP:
+                # Если доставка из магазина, провайдер может быть или сам магазин (если есть ID) или просто "Магазин"
+                # В текущей реализации магазина provider_id может быть shopper_id если это закупщик
+                # Но логика handle_shop_take ставит provider_id = shopper_id
+                shopper = db.get_shopper(provider_id)
+                if shopper:
+                    provider_name = f"Закупщик {shopper.get('name', '')}"
+                    provider_address = "Связаться с закупщиком"
+                    provider_phone = shopper.get('phone', '')
+                else:
+                    shop = db.get_cafe(provider_id) # Возможно это магазин как кафе
+                    if shop:
+                        provider_name = shop.get('name', 'Магазин')
+                        provider_address = shop.get('address', 'Адрес не указан')
+
+            elif service_type == config.SERVICE_PHARMACY:
+                pharmacy = db.get_pharmacy(provider_id)
+                if pharmacy:
+                    provider_name = pharmacy.get('name', 'Аптека')
+                    provider_address = pharmacy.get('address', 'Адрес не указан')
+                    provider_phone = pharmacy.get('phone', '')
+
+        # Оплата и цена
+        payment_method = config.PAYMENT_METHODS.get(order.get('payment_method'), 'Наличные')
+        price_total = order.get('price_total', 0)
+        price_str = f"{int(price_total)} сом" if price_total else "По чеку/Договорная"
+
+        # Детали заказа
+        details = order.get('details', 'Нет деталей')
         # Сообщаем водителю
         driver_msg = f"""📦 *ДОСТАВКА ВАША!*
+{commission_msg}
+
+🏪 *Откуда:* {provider_name}
+📍 *Адрес:* {provider_address}
+{f'📞 *Тел:* {provider_phone}' if provider_phone else ''}
 
 📋 *Заказ:* #{order_id}
-📞 *Клиент:* {order.get('client_phone', '')}
-📍 *Адрес:* {order.get('address', 'Уточнить')}
+{config.ORDER_STATUS_READY if order.get('status') == config.ORDER_STATUS_READY else ''}
+{ready_time_str}
+📝 *Состав:*
+{details}
 
-💰 Не забудьте взять оплату.{commission_msg}"""
+👤 *Клиент:* {order.get('client_phone', '')}
+📍 *Куда:* {order.get('address', 'Уточнить у клиента')}
+
+💰 *Оплата:* {payment_method}
+💵 *Сумма:* {price_str}
+
+✅ Свяжитесь с отправителем и клиентом!"""
 
         delivery_buttons = [
             {"text": "📍 Я приехал", "callback": f"delivery_arrived_{order_id}"},
@@ -1237,15 +1320,13 @@ def handle_delivery_arrived(data: str, user_id: str, user_name: str,
             return jsonify({"status": "ok"}), 200
 
         driver = db.get_driver(user_id)
-        driver_name = (driver.get('name') if driver else None) or user_name
-        driver_phone = (driver.get('phone') if driver else None) or 'Не указан'
-        driver_plate = (driver.get('plate') if driver else None) or 'Не указан'
+        profile = _normalize_driver_profile(driver, user_name)
 
         client_msg = (
             "📍 *Курьер приехал и ожидает вас!*\n"
-            f"👤 *Курьер:* {driver_name}\n"
-            f"📞 *Телефон:* {driver_phone}\n"
-            f"🔢 *Номер:* {driver_plate}\n\n"
+            f"👤 *Курьер:* {profile['name']}\n"
+            f"📞 *Телефон:* {profile['phone']}\n"
+            f"🔢 *Номер:* {profile['plate']}\n\n"
             "🚶 Пожалуйста, выходите."
         )
         send_whatsapp(order.get('client_phone', ''), client_msg)
