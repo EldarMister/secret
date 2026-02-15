@@ -1700,8 +1700,11 @@ def _handle_register_command(user_id: str, command: str, db) -> tuple:
     
     # Проверяем, зарегистрирован ли уже
     driver = db.get_driver(user_id)
+    profile_incomplete = False
+    if driver:
+        profile_incomplete = not (driver.get('name') and driver.get('phone') and driver.get('car_model') and driver.get('plate'))
     
-    if driver and not is_update:
+    if driver and not is_update and not profile_incomplete:
         # Уже зарегистрирован — показываем данные
         driver_type_key = driver.get('driver_type', 'taxi')
         type_emoji = config.DRIVER_TYPES.get(driver_type_key, '🚖 Такси').split(' ')[0]
