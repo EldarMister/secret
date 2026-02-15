@@ -50,6 +50,16 @@ def _normalize_driver_profile(driver, fallback_name: str = "") -> dict:
     }
 
 
+def _answer_callback(callback_query_id: str, text: str = None) -> None:
+    """Safely answer Telegram callback query (optional text)."""
+    if not callback_query_id:
+        return
+    try:
+        answer_telegram_callback(callback_query_id, text)
+    except Exception:
+        logger.exception("Failed to answer Telegram callback")
+
+
 # =============================================================================
 # TELEGRAM WEBHOOK HANDLER
 # =============================================================================
@@ -89,8 +99,10 @@ def handle_callback_query(callback_query: dict) -> tuple:
         
         logger.info(f"Callback from {user_name} ({user_id}): {data}")
 
-        # Быстро подтверждаем любой callback, чтобы кнопка не "крутилась"
-        answer_telegram_callback(callback_query_id)
+        # Быстро подтверждаем callback, если не нужен кастомный ответ
+        needs_custom_answer = data.startswith(("taxi_take_", "porter_take_", "delivery_take_"))
+        if not needs_custom_answer:
+            answer_telegram_callback(callback_query_id)
         
         db = get_db()
         
@@ -110,7 +122,7 @@ def handle_callback_query(callback_query: dict) -> tuple:
         
         # === ТАКСИ ===
         elif data.startswith("taxi_take_"):
-            return handle_taxi_take(data, user_id, user_name, chat_id, message_id, db)
+            return handle_taxi_take(data, user_id, user_name, chat_id, message_id, db, callback_query_id)
         elif data.startswith("taxi_arrived_"):
             return handle_taxi_arrived(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("taxi_cancel_"):
@@ -120,7 +132,7 @@ def handle_callback_query(callback_query: dict) -> tuple:
         
         # === ПОРТЕР ===
         elif data.startswith("porter_take_"):
-            return handle_porter_take(data, user_id, user_name, chat_id, message_id, db)
+            return handle_porter_take(data, user_id, user_name, chat_id, message_id, db, callback_query_id)
         
         # === МАГАЗИН ===
         elif data.startswith("shop_take_"):
@@ -132,7 +144,7 @@ def handle_callback_query(callback_query: dict) -> tuple:
         
         # === ДОСТАВКА ЕДЫ ===
         elif data.startswith("delivery_take_"):
-            return handle_delivery_take(data, user_id, user_name, chat_id, message_id, db)
+            return handle_delivery_take(data, user_id, user_name, chat_id, message_id, db, callback_query_id)
         elif data.startswith("delivery_arrived_"):
             return handle_delivery_arrived(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("delivery_finish_"):
@@ -168,10 +180,17 @@ def handle_cafe_accept(data: str, user_id: str, user_name: str,
     """Обработка принятия заказа кафе"""
     try:
         order_id = data.split("_")[2]
-        
-        # Проверяем, не занят ли заказ
-        if db.is_order_taken(order_id):
-            send_telegram_private(user_id, "❌ Заказ уже забрали другие!")
+
+        def _reply(text: str = None) -> None:
+            _answer_callback(callback_query_id, text)
+
+        if not order:
+            send_telegram_private(user_id, "❌ Заказ не найден.")
+            _reply()
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED):
+            send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            _reply()
             return jsonify({"status": "ok"}), 200
         
         # Получаем заказ
@@ -545,15 +564,14 @@ def _is_taxi_order_closed(order: dict) -> bool:
 
 
 def handle_taxi_take(data: str, user_id: str, user_name: str,
-                     chat_id: str, message_id: int, db) -> tuple:
+                     chat_id: str, message_id: int, db,
+                     callback_query_id: str = None) -> tuple:
     """Обработка взятия заказа таксистом"""
     try:
         order_id = data.split("_")[2]
-        
-        # Проверяем, не занят ли заказ
-        if db.is_order_taken(order_id):
-            send_telegram_private(user_id, "❌ Заказ уже забрали другие!")
-            return jsonify({"status": "ok"}), 200
+
+        def _reply(text: str = None) -> None:
+            _answer_callback(callback_query_id, text)
         
         # Получаем информацию о водителе
         driver = db.get_driver(user_id)
@@ -563,18 +581,22 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
                 user_id,
                 "❌ Вы не зарегистрированы!\n\nДля регистрации напишите боту /register в личные сообщения."
             )
+            _reply()
             return jsonify({"status": "ok"}), 200
         
         # Получаем заказ (нужен для определения комиссии)
         order = db.get_order(order_id)
         if not order:
             send_telegram_private(user_id, "❌ Заказ не найден.")
+            _reply()
             return jsonify({"status": "ok"}), 200
         if order.get('status') == config.ORDER_STATUS_CANCELLED:
             send_telegram_private(user_id, "❌ Заказ уже закрыт (отменён).")
+            _reply()
             return jsonify({"status": "ok"}), 200
         if order.get('status') == config.ORDER_STATUS_COMPLETED:
             send_telegram_private(user_id, "❌ Заказ уже закрыт (завершён).")
+            _reply()
             return jsonify({"status": "ok"}), 200
         
         # Определяем комиссию: если клиент предложил цену < 70 → 5 сом, иначе 10 сом
@@ -594,17 +616,26 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
                 f"⚠️ Минимальный баланс для приёма заказов: *{config.MIN_DRIVER_BALANCE} сом*\n\n"
                 f"📌 Пополните баланс и попробуйте снова."
             )
+            _reply()
             return jsonify({"status": "ok"}), 200
         
         now = datetime.now()
-        # Обновляем статус заказа
-        db.update_order_status(
+        # Атомарно назначаем водителя
+        assigned = db.assign_order_to_driver(
             order_id,
             config.ORDER_STATUS_IN_DELIVERY,
             driver_id=user_id,
+            allowed_statuses=[
+                config.ORDER_STATUS_PENDING,
+                config.ORDER_STATUS_AUCTION,
+                config.ORDER_STATUS_URGENT
+            ],
             driver_assigned_at=now,
             driver_commission=commission
         )
+        if not assigned:
+            _reply("Заказ уже забрали")
+            return jsonify({"status": "ok"}), 200
         
         # Списываем комиссию
         success, new_balance = db.update_driver_balance(
@@ -673,12 +704,13 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
         )
         
         db.log_transaction("TAXI_ORDER_TAKEN", user_id, order_id)
-        
+        _reply()
         return jsonify({"status": "ok"}), 200
         
     except Exception as e:
         logger.exception("Error handling taxi take")
         send_telegram_private(user_id, "❌ Ошибка при взятии заказа.")
+        _answer_callback(callback_query_id)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -866,7 +898,8 @@ def handle_taxi_cancel(data: str, user_id: str, user_name: str,
 # =============================================================================
 
 def handle_porter_take(data: str, user_id: str, user_name: str,
-                       chat_id: str, message_id: int, db) -> tuple:
+                       chat_id: str, message_id: int, db,
+                       callback_query_id: str = None) -> tuple:
     """Обработка взятия заказа портером"""
     try:
         order_id = data.split("_")[2]
@@ -883,8 +916,22 @@ def handle_porter_take(data: str, user_id: str, user_name: str,
             db.add_driver(user_id, user_name, driver_type='porter')
             driver = db.get_driver(user_id)
         
-        # Обновляем статус
-        db.update_order_status(order_id, config.ORDER_STATUS_IN_DELIVERY, driver_id=user_id)
+        # Атомарно назначаем водителя
+        assigned = db.assign_order_to_driver(
+            order_id,
+            config.ORDER_STATUS_IN_DELIVERY,
+            driver_id=user_id,
+            allowed_statuses=[
+                config.ORDER_STATUS_PENDING,
+                config.ORDER_STATUS_AUCTION,
+                config.ORDER_STATUS_ACCEPTED,
+                config.ORDER_STATUS_READY,
+                config.ORDER_STATUS_URGENT
+            ]
+        )
+        if not assigned:
+            _reply("Заказ уже забрали")
+            return jsonify({"status": "ok"}), 200
         
         # Списываем комиссию
         commission = config.PORTER_COMMISSION
@@ -934,15 +981,16 @@ def handle_porter_take(data: str, user_id: str, user_name: str,
 
 ⏱ Заказ в работе."""
         
-        edit_telegram_message(chat_id, message_id, updated_text)
+        edit_telegram_message(chat_id, message_id, updated_text, buttons=[])
         
         db.log_transaction("PORTER_ORDER_TAKEN", user_id, order_id)
-        
+        _reply()
         return jsonify({"status": "ok"}), 200
         
     except Exception as e:
         logger.exception("Error handling porter take")
         send_telegram_private(user_id, "❌ Ошибка при взятии заказа.")
+        _answer_callback(callback_query_id)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -1119,27 +1167,29 @@ def _is_delivery_order_closed(order: dict) -> bool:
 
 
 def handle_delivery_take(data: str, user_id: str, user_name: str,
-                         chat_id: str, message_id: int, db) -> tuple:
+                         chat_id: str, message_id: int, db,
+                         callback_query_id: str = None) -> tuple:
     """Обработка взятия доставки еды/лекарств/магазина"""
     try:
         order_id = data.split("_")[2]
+
+        def _reply(text: str = None) -> None:
+            _answer_callback(callback_query_id, text)
 
         # Получаем заказ
         order = db.get_order(order_id)
         if not order:
             send_telegram_private(user_id, "❌ Заказ не найден.")
+            _reply()
             return jsonify({"status": "ok"}), 200
         if order.get('status') in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED):
             send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            _reply()
             return jsonify({"status": "ok"}), 200
 
         if _is_delivery_order_closed(order):
             send_telegram_private(user_id, "❌ Заказ уже закрыт.")
-            return jsonify({"status": "ok"}), 200
-
-        current_driver = order.get('driver_id')
-        if current_driver and str(current_driver) != str(user_id):
-            send_telegram_private(user_id, "❌ Заказ уже забрали другие!")
+            _reply()
             return jsonify({"status": "ok"}), 200
         
         # Определяем тип доставки и комиссию
@@ -1165,6 +1215,7 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
                 commission_msg = f"\n💰 Списано комиссии: {commission} сом"
             else:
                 send_telegram_private(user_id, f"❌ Недостаточно средств. Нужно: {commission} сом")
+                _reply()
                 return jsonify({"status": "ok"}), 200
         
         # Получаем информацию о водителе
@@ -1175,8 +1226,20 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
         
         profile = _normalize_driver_profile(driver, user_name)
         
-        # Обновляем статус
-        db.update_order_status(order_id, config.ORDER_STATUS_IN_DELIVERY, driver_id=user_id)
+        # Атомарно назначаем водителя
+        assigned = db.assign_order_to_driver(
+            order_id,
+            config.ORDER_STATUS_IN_DELIVERY,
+            driver_id=user_id,
+            allowed_statuses=[
+                config.ORDER_STATUS_PENDING,
+                config.ORDER_STATUS_AUCTION,
+                config.ORDER_STATUS_URGENT
+            ]
+        )
+        if not assigned:
+            _reply("Заказ уже забрали")
+            return jsonify({"status": "ok"}), 200
         
         # Сообщаем клиенту
         client_msg = f"""✅ *Курьер найден!*
@@ -1282,11 +1345,12 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
         edit_telegram_message(chat_id, message_id, updated_text, buttons=[])
         
         db.log_transaction("DELIVERY_TAKEN", user_id, order_id)
-        
+        _reply()
         return jsonify({"status": "ok"}), 200
         
     except Exception as e:
         logger.exception("Error handling delivery take")
+        _answer_callback(callback_query_id)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

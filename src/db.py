@@ -547,6 +547,54 @@ class Database:
                 )
             
             return cur.rowcount > 0
+
+    def assign_order_to_driver(
+        self,
+        order_id: str,
+        status: str,
+        driver_id: str,
+        allowed_statuses: Optional[List[str]] = None,
+        driver_assigned_at: datetime = None,
+        driver_commission: float = None
+    ) -> Optional[Dict]:
+        """Атомарно назначить водителя, если заказ ещё свободен."""
+        if not allowed_statuses:
+            allowed_statuses = [
+                config.ORDER_STATUS_PENDING,
+                config.ORDER_STATUS_AUCTION
+            ]
+
+        with self.get_cursor(commit=True) as cur:
+            updates = ["status = %s", "driver_id = %s", "updated_at = CURRENT_TIMESTAMP"]
+            params = [status, driver_id]
+
+            if driver_assigned_at is not None:
+                updates.append("driver_assigned_at = %s")
+                params.append(driver_assigned_at)
+            if driver_commission is not None:
+                updates.append("driver_commission = %s")
+                params.append(driver_commission)
+
+            params.append(order_id)
+            params.append(allowed_statuses)
+
+            cur.execute(
+                f"""UPDATE orders SET {', '.join(updates)}
+                    WHERE order_id = %s
+                      AND driver_id IS NULL
+                      AND status = ANY(%s)
+                    RETURNING *""",
+                params
+            )
+            row = cur.fetchone()
+            if row:
+                self.log_transaction(
+                    action=f"ORDER_{status}",
+                    order_id=order_id,
+                    details=f"Driver assigned: {driver_id}"
+                )
+                return dict(row)
+            return None
     
     def set_order_urgent(self, order_id: str) -> bool:
         """Пометить заказ как срочный (таймаут)"""
