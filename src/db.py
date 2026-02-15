@@ -1423,15 +1423,27 @@ class User:
     
     def set_state(self, state: str):
         """Установить состояние пользователя"""
-        self.current_state = state
-        db = get_db()
-        db.set_user_state(self.phone, state)
-    
+        try:
+            self.current_state = state
+            db = get_db()
+            db.set_user_state(self.phone, state)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error setting user state for {self.phone}: {e}")
+            raise
+
     def set_temp_data(self, key: str, value: Any):
         """Установить временные данные"""
-        self.temp_data[key] = value
-        db = get_db()
-        db.set_user_temp_data(self.phone, key, value)
+        try:
+            self.temp_data[key] = value
+            db = get_db()
+            db.set_user_temp_data(self.phone, key, value)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error setting user temp_data for {self.phone}: {e}")
+            raise
     
     def get_temp_data(self, key: str, default=None) -> Any:
         """Получить временные данные"""
