@@ -341,6 +341,8 @@ def handle_whatsapp():
         # Аптека
         elif user.current_state == config.STATE_PHARMACY_WAIT_RX:
             return handle_pharmacy_request(user, incoming_msg, media_url, db)
+        elif user.current_state == config.STATE_PHARMACY_ADDRESS:
+            return handle_pharmacy_delivery_address(user, incoming_msg, db)
         
         # Такси
         elif user.current_state == config.STATE_TAXI_ROUTE:
@@ -1079,6 +1081,78 @@ def handle_pharmacy_request(user: User, message: str, media_url: str, db) -> tup
     confirm_msg = config.CONFIRM_PHARMACY.format(order_details=request_text)
     send_whatsapp(user.phone, confirm_msg)
     
+    return jsonify({"status": "ok"}), 200
+
+
+def handle_pharmacy_delivery_address(user: User, message: str, db) -> tuple:
+    """Получили адрес клиента после цены аптеки: сразу оформляем доставку."""
+    address = (message or "").strip()
+    if not address:
+        send_whatsapp(user.phone, "📍 Введите адрес доставки.")
+        return jsonify({"status": "ok"}), 200
+
+    if _is_vague_address(address):
+        send_whatsapp(user.phone, config.VAGUE_ADDRESS_PROMPT)
+        return jsonify({"status": "ok"}), 200
+
+    order_id = user.get_temp_data('pharmacy_order_id')
+    pharmacy_id = user.get_temp_data('pharmacy_selected_pharmacy_id')
+    pharmacy_name = user.get_temp_data('pharmacy_selected_pharmacy_name', 'Аптека')
+    drug_price = float(user.get_temp_data('pharmacy_selected_price', 0) or 0)
+
+    if not order_id or not pharmacy_id or drug_price <= 0:
+        user.set_state(config.STATE_IDLE)
+        user.clear_temp_data()
+        send_whatsapp(user.phone, "❌ Ошибка данных заказа. Начните заново.")
+        return jsonify({"status": "ok"}), 200
+
+    order = db.get_order(order_id)
+    if not order:
+        user.set_state(config.STATE_IDLE)
+        user.clear_temp_data()
+        send_whatsapp(user.phone, "❌ Заказ не найден. Начните заново.")
+        return jsonify({"status": "ok"}), 200
+
+    total_price = drug_price + config.PHARMACY_DELIVERY_FEE + config.TAXI_PHARMACY_COMMISSION
+
+    # Записываем адрес, итоговую цену и переводим в готовность к доставке
+    db.update_order_status(
+        order_id,
+        config.ORDER_STATUS_READY,
+        provider_id=pharmacy_id,
+        price=total_price,
+        address=address
+    )
+
+    taxi_msg = f"""💊 *ЗАКАЗ АПТЕКА (ДОСТАВКА)*
+
+🏥 *Забрать из:* {pharmacy_name}
+📋 *Лекарство:* {order.get('details', '')}
+💵 *Цена лекарства:* {int(drug_price)} сом
+💰 *С клиента взять:* {int(total_price)} сом
+📍 *Куда доставить:* {address}
+📞 *Клиент:* {user.phone}"""
+
+    buttons = [{
+        "text": "🚖 Взять доставку",
+        "callback": f"delivery_take_{order_id}"
+    }]
+    send_telegram_group(config.GROUP_TAXI_ID, taxi_msg, buttons)
+
+    send_telegram_private(
+        str(pharmacy_id),
+        f"✅ Клиент оформил заказ #{order_id}.\nПодготовьте медикаменты — скоро приедет таксист."
+    )
+
+    send_whatsapp(
+        user.phone,
+        f"✅ Заказ оформлен.\n🚖 Ищем курьера для доставки из аптеки.\n💰 К оплате: {int(total_price)} сом."
+    )
+
+    user.set_state(config.STATE_IDLE)
+    user.clear_temp_data()
+    db.log_transaction("PHARMACY_ADDRESS_CONFIRMED", user.phone, order_id, amount=total_price)
+
     return jsonify({"status": "ok"}), 200
 
 

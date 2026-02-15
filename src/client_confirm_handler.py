@@ -76,7 +76,7 @@ def _confirm_pharmacy_order(user: User, db) -> Tuple[dict, int]:
         # Обновляем заказ
         db.update_order_status(
             order_id, 
-            config.ORDER_STATUS_IN_PROGRESS,
+            config.ORDER_STATUS_READY,
             provider_id=selected_bid['pharmacy_id'],
             price=total_price
         )

@@ -7,6 +7,7 @@ Telegram Handler Module for Business Assistant GO
 from flask import request, jsonify
 import json
 import logging
+import re
 from datetime import datetime
 
 import config
@@ -58,6 +59,9 @@ def handle_callback_query(callback_query: dict) -> tuple:
         chat_id = str(callback_query['message']['chat']['id'])
         
         logger.info(f"Callback from {user_name} ({user_id}): {data}")
+
+        # Быстро подтверждаем любой callback, чтобы кнопка не "крутилась"
+        answer_telegram_callback(callback_query_id)
         
         db = get_db()
         
@@ -69,14 +73,12 @@ def handle_callback_query(callback_query: dict) -> tuple:
         
         # === АПТЕКА ===
         elif data.startswith("pharm_bid_"):
-            return handle_pharmacy_bid(data, user_id, user_name, chat_id, db)
+            return handle_pharmacy_bid(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("pharm_price_"):
             return handle_pharmacy_price_submit(data, user_id, user_name, db)
         
         # === ТАКСИ ===
         elif data.startswith("taxi_take_"):
-            # Мгновенно подтверждаем клик, чтобы у водителя не крутился Telegram loader.
-            answer_telegram_callback(callback_query_id)
             return handle_taxi_take(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("taxi_arrived_"):
             return handle_taxi_arrived(data, user_id, user_name, chat_id, message_id, db)
@@ -254,10 +256,37 @@ def handle_cafe_ready_time(data: str, user_id: str, user_name: str, db) -> tuple
 # =============================================================================
 
 def handle_pharmacy_bid(data: str, user_id: str, user_name: str,
-                        chat_id: str, db) -> tuple:
+                        chat_id: str, message_id: int, db) -> tuple:
     """Обработка отклика аптеки - запрос цены"""
     try:
         order_id = data.split("_")[2]
+
+        order = db.get_order(order_id)
+        if not order:
+            send_telegram_private(user_id, "❌ Заказ не найден.")
+            return jsonify({"status": "ok"}), 200
+
+        status = order.get('status')
+        if status in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED):
+            send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            return jsonify({"status": "ok"}), 200
+
+        current_provider = order.get('provider_id')
+        if current_provider and str(current_provider) != str(user_id):
+            send_telegram_private(user_id, "❌ Этот заказ уже забрала другая аптека.")
+            return jsonify({"status": "ok"}), 200
+
+        # Помечаем заказ как забранный аптекой
+        db.update_order_status(order_id, config.ORDER_STATUS_ACCEPTED, provider_id=user_id)
+
+        # Обновляем сообщение в группе: кнопка больше не активна
+        group_text = f"""💊 *ЗАКАЗ ЗАБРАН АПТЕКОЙ* ✅
+
+🏥 *Аптека:* {user_name}
+📋 *Заказ:* #{order_id}
+
+⏱ Ожидаем цену от аптеки..."""
+        edit_telegram_message(chat_id, message_id, group_text, buttons=[])
         
         # Запрашиваем цену у аптеки через ЛС
         msg = f"""💊 *УКАЖИТЕ ЦЕНУ*
@@ -271,12 +300,70 @@ def handle_pharmacy_bid(data: str, user_id: str, user_name: str,
         send_telegram_private(user_id, msg)
         
         # Сохраняем контекст
-        db.set_user_temp_data(user_id, 'pending_pharmacy_order', order_id)
+        db.set_telegram_session_data(user_id, 'pending_pharmacy_order', order_id)
         
         return jsonify({"status": "ok"}), 200
         
     except Exception as e:
         logger.exception("Error handling pharmacy bid")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def _submit_pharmacy_price(order_id: str, user_id: str, user_name: str, price: float, db) -> tuple:
+    """Сохранить цену аптеки и попросить клиента ввести адрес доставки."""
+    try:
+        order = db.get_order(order_id)
+        if not order:
+            send_telegram_private(user_id, "❌ Заказ не найден.")
+            return jsonify({"status": "ok"}), 200
+
+        if order.get('service_type') != config.SERVICE_PHARMACY:
+            send_telegram_private(user_id, "❌ Это не заказ аптеки.")
+            return jsonify({"status": "ok"}), 200
+
+        if order.get('status') in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED):
+            send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            return jsonify({"status": "ok"}), 200
+
+        current_provider = order.get('provider_id')
+        if current_provider and str(current_provider) != str(user_id):
+            send_telegram_private(user_id, "❌ Этот заказ уже обрабатывает другая аптека.")
+            return jsonify({"status": "ok"}), 200
+
+        # Фиксируем аптеку и цену лекарства
+        db.add_pharmacy_bid(order_id, user_id, price)
+        db.update_order_status(order_id, config.ORDER_STATUS_ACCEPTED, provider_id=user_id, price=price)
+
+        client_phone = order.get('client_phone', '')
+        client_user = db.get_user(client_phone)
+        if client_user:
+            client_user.set_state(config.STATE_PHARMACY_ADDRESS)
+            client_user.set_temp_data('service_type', config.SERVICE_PHARMACY)
+            client_user.set_temp_data('pharmacy_order_id', order_id)
+            client_user.set_temp_data('pharmacy_selected_pharmacy_id', user_id)
+            client_user.set_temp_data('pharmacy_selected_pharmacy_name', user_name)
+            client_user.set_temp_data('pharmacy_selected_price', float(price))
+
+        client_msg = f"""💊 *Лекарство найдено*
+
+🏥 *Аптека:* {user_name}
+💵 *Цена лекарства:* {int(price)} сом
+
+📍 Введите адрес доставки.
+Заказ автоматически оформим после адреса."""
+        send_whatsapp(client_phone, client_msg)
+
+        send_telegram_private(
+            user_id,
+            f"✅ Цена указана: {int(price)} сом\n\nОжидаем адрес клиента для оформления."
+        )
+        db.set_telegram_session_data(user_id, 'pending_pharmacy_order', None)
+
+        db.log_transaction("PHARMACY_PRICE_SUBMITTED", user_id, order_id, amount=price)
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.exception("Error submitting pharmacy price")
+        send_telegram_private(user_id, "❌ Ошибка при отправке цены.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
@@ -286,42 +373,7 @@ def handle_pharmacy_price_submit(data: str, user_id: str, user_name: str, db) ->
         parts = data.split("_")
         order_id = parts[2]
         price = float(parts[3])
-        
-        # Получаем заказ
-        order = db.get_order(order_id)
-        if not order:
-            return jsonify({"status": "error"}), 404
-        
-        # Сохраняем предложение
-        db.add_pharmacy_bid(order_id, user_id, price)
-        
-        # Итоговая цена для клиента: лекарство + доставка + комиссия таксиста
-        total = price + config.PHARMACY_DELIVERY_FEE + config.TAXI_PHARMACY_COMMISSION
-        
-        # Спрашиваем клиента (WhatsApp)
-        client_msg = f"""💊 *Найдено в аптеке!*
-
-🏥 *Аптека:* {user_name}
-💵 *Цена лекарства:* {price} сом
-🚚 *Доставка:* {config.PHARMACY_DELIVERY_FEE} сом
-💼 *Комиссия:* {config.TAXI_PHARMACY_COMMISSION} сом
-💰 *ИТОГО:* {total} сом
-
-Берем?"""
-        
-        buttons = [
-            {"text": "✅ Да", "id": f"pharm_yes_{order_id}_{user_id}"},
-            {"text": "❌ Нет", "id": f"pharm_no_{order_id}"}
-        ]
-        
-        send_whatsapp_buttons(order.get('client_phone', ''), client_msg, buttons)
-        
-        # Уведомляем аптеку
-        send_telegram_private(user_id, f"✅ Предложение отправлено клиенту. Ждем подтверждения.")
-        
-        db.log_transaction("PHARMACY_PRICE_SUBMITTED", user_id, order_id, amount=price)
-        
-        return jsonify({"status": "ok"}), 200
+        return _submit_pharmacy_price(order_id, user_id, user_name, price, db)
         
     except Exception as e:
         logger.exception("Error handling pharmacy price submit")
@@ -1141,15 +1193,30 @@ def handle_telegram_message(message: dict) -> tuple:
                 return _handle_reg_confirm(user_id, text, db)
         
         # =====================================================================
-        # ВВОД ЦЕНЫ АПТЕКОЙ (старая логика)
+        # ВВОД ЦЕНЫ АПТЕКОЙ (через ЛС)
         # =====================================================================
         
         if text.isdigit():
             price = int(text)
-            msg = f"""💊 *Цена указана:* {price} сом
 
-Ожидаем подтверждения клиента..."""
-            send_telegram_private(user_id, msg)
+            # 1) Пытаемся взять pending order из telegram_session
+            pending_order_id = db.get_telegram_session_data(user_id, 'pending_pharmacy_order')
+
+            # 2) Если нет, пробуем вытащить order_id из reply_to_message
+            if not pending_order_id:
+                reply_text = (message.get('reply_to_message') or {}).get('text', '')
+                m = re.search(r'#(GO\d+)', reply_text, flags=re.IGNORECASE)
+                if m:
+                    pending_order_id = m.group(1).upper()
+
+            if pending_order_id:
+                return _submit_pharmacy_price(pending_order_id, user_id, user_name, price, db)
+
+            send_telegram_private(
+                user_id,
+                "❌ Не найден ожидающий заказ аптеки.\n"
+                "Нажмите кнопку «У нас есть (указать цену)» в группе и повторите."
+            )
             return jsonify({"status": "ok"}), 200
         
         # Неизвестное сообщение — показать меню

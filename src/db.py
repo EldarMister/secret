@@ -500,7 +500,8 @@ class Database:
                            price: float = None, ready_time: int = None,
                            driver_assigned_at: datetime = None,
                            driver_commission: float = None,
-                           completed_at: datetime = None) -> bool:
+                           completed_at: datetime = None,
+                           address: str = None) -> bool:
         """Обновить статус заказа"""
         with self.get_cursor(commit=True) as cur:
             updates = ["status = %s", "updated_at = CURRENT_TIMESTAMP"]
@@ -527,6 +528,9 @@ class Database:
             if completed_at is not None:
                 updates.append("completed_at = %s")
                 params.append(completed_at)
+            if address is not None:
+                updates.append("address = %s")
+                params.append(address)
             
             params.append(order_id)
             
