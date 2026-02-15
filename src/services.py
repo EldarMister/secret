@@ -469,14 +469,17 @@ def _clean_phone(phone: str) -> str:
 
 
 def format_phone(phone: str) -> str:
-    """Форматировать номер телефона для отображения"""
+    """Форматировать номер телефона для отображения (формат: 0220 203 021)"""
     phone = _clean_phone(phone)
-    
+
+    # Если начинается с 996 → заменить на 0
+    if phone.startswith("996"):
+        phone = "0" + phone[3:]
+
+    # Форматировать как XXXX XXX XXX (4 цифры, пробел, 3 цифры, пробел, 3 цифры)
     if len(phone) == 10:
-        return f"+996 ({phone[:3]}) {phone[3:6]}-{phone[6:8]}-{phone[8:]}"
-    elif len(phone) == 12 and phone.startswith("996"):
-        return f"+{phone[:3]} ({phone[3:6]}) {phone[6:9]}-{phone[9:11]}-{phone[11:]}"
-    
+        return f"{phone[:4]} {phone[4:7]} {phone[7:]}"
+
     return phone
 
 

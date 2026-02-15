@@ -871,19 +871,26 @@ def handle_taxi_cancel(data: str, user_id: str, user_name: str,
         db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"), int(message_id))
         _close_taxi_driver_message(chat_id, message_id, driver_msg)
 
+        # КРИТИЧНО: Сначала отправляем WhatsApp клиенту, ПОТОМ работаем с состоянием
         client_msg = ("❌ Ваш заказ отменён.\n"
                       "Хотите вызвать такси на тот же адрес и цену или отказаться?\n"
                       "Ответьте в чат: Да / Нет.")
         client_phone = order.get('client_phone', '')
-        if client_phone:
-            client_user = db.get_user(client_phone)
-            if client_user:
-                client_user.set_state(config.STATE_TAXI_REORDER_CHOICE)
-                client_user.set_temp_data('service_type', config.SERVICE_TAXI)
-                client_user.set_temp_data('taxi_reorder_route', order.get('details', '') or '')
-                client_user.set_temp_data('taxi_reorder_price', float(order.get('price_total') or 0))
 
+        # Отправляем WhatsApp ДО любых операций с БД (чтобы гарантировать отправку)
         send_whatsapp(client_phone, client_msg)
+
+        # Теперь безопасно работаем с состоянием клиента
+        if client_phone:
+            try:
+                client_user = db.get_user(client_phone)
+                if client_user:
+                    client_user.set_state(config.STATE_TAXI_REORDER_CHOICE)
+                    client_user.set_temp_data('service_type', config.SERVICE_TAXI)
+                    client_user.set_temp_data('taxi_reorder_route', order.get('details', '') or '')
+                    client_user.set_temp_data('taxi_reorder_price', float(order.get('price_total') or 0))
+            except Exception as e:
+                logger.error(f"Error setting client state after cancel: {e}")
 
         db.log_transaction("TAXI_DRIVER_CANCEL", user_id, order_id, amount=(-commission if refund else None))
         return jsonify({"status": "ok"}), 200
@@ -2001,15 +2008,34 @@ def _handle_reg_confirm(user_id: str, text: str, db) -> tuple:
 
 def _save_driver_registration(user_id: str, db) -> tuple:
     """Сохранение регистрации водителя"""
-    
+
     session = db.get_telegram_session(user_id)
+    if not session:
+        logger.error(f"[BUG] No session found for driver {user_id}")
+        send_telegram_private(user_id, "❌ Ошибка: сессия не найдена. Начните регистрацию заново с /driver")
+        return jsonify({"status": "error"}), 400
+
     temp_data = session.get('temp_data', {})
-    
+
+    # DEBUG: Логируем все данные, которые собрали
+    logger.info(f"[DRIVER_REG] User {user_id} temp_data: {temp_data}")
+
     driver_type = temp_data.get('driver_type', 'taxi')
     name = temp_data.get('name', '')
     phone = temp_data.get('phone', '')
     car_model = temp_data.get('car_model', '')
     plate = temp_data.get('plate', '')
+
+    # Валидация критичных полей
+    if not name or not phone:
+        logger.error(f"[BUG] Missing required fields for {user_id}: name={bool(name)}, phone={bool(phone)}")
+        send_telegram_private(
+            user_id,
+            "❌ Ошибка: не все данные были сохранены.\n\n"
+            "Пожалуйста, начните регистрацию заново с /driver"
+        )
+        db.clear_telegram_session(user_id)
+        return jsonify({"status": "error"}), 400
     
     # Сохраняем водителя
     db.add_driver(
