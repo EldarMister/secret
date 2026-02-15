@@ -13,7 +13,8 @@ import config
 from db import get_db
 from services import (
     send_whatsapp, send_telegram_private, send_telegram_group,
-    edit_telegram_message, delete_telegram_message, format_phone
+    edit_telegram_message, delete_telegram_message, format_phone,
+    answer_telegram_callback
 )
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ def handle_callback_query(callback_query: dict) -> tuple:
     """Обработка нажатия кнопок в Telegram"""
     try:
         data = callback_query.get('data', '')
+        callback_query_id = callback_query.get('id', '')
         user_id = str(callback_query['from']['id'])
         user_name = callback_query['from'].get('first_name', 'Unknown')
         message_id = callback_query['message']['message_id']
@@ -73,13 +75,15 @@ def handle_callback_query(callback_query: dict) -> tuple:
         
         # === ТАКСИ ===
         elif data.startswith("taxi_take_"):
+            # Мгновенно подтверждаем клик, чтобы у водителя не крутился Telegram loader.
+            answer_telegram_callback(callback_query_id)
             return handle_taxi_take(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("taxi_arrived_"):
-            return handle_taxi_arrived(data, user_id, user_name, db)
+            return handle_taxi_arrived(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("taxi_cancel_"):
-            return handle_taxi_cancel(data, user_id, user_name, db)
+            return handle_taxi_cancel(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("taxi_finish_"):
-            return handle_taxi_finish(data, user_id, user_name, db)
+            return handle_taxi_finish(data, user_id, user_name, chat_id, message_id, db)
         
         # === ПОРТЕР ===
         elif data.startswith("porter_take_"):
@@ -328,6 +332,24 @@ def handle_pharmacy_price_submit(data: str, user_id: str, user_name: str, db) ->
 # TAXI HANDLERS
 # =============================================================================
 
+def _taxi_driver_key(order_id: str, suffix: str) -> str:
+    return f"taxi_order_{order_id}_{suffix}"
+
+
+def _close_taxi_driver_message(chat_id: str, message_id: int, text: str) -> None:
+    """Закрыть (деактивировать) сообщение с кнопками у водителя."""
+    try:
+        if chat_id and message_id:
+            edit_telegram_message(chat_id, message_id, text, buttons=[])
+    except Exception:
+        logger.exception("Failed to close taxi driver message")
+
+
+def _is_taxi_order_closed(order: dict) -> bool:
+    status = order.get('status')
+    return status in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED)
+
+
 def handle_taxi_take(data: str, user_id: str, user_name: str,
                      chat_id: str, message_id: int, db) -> tuple:
     """Обработка взятия заказа таксистом"""
@@ -355,7 +377,10 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
             send_telegram_private(user_id, "❌ Заказ не найден.")
             return jsonify({"status": "ok"}), 200
         if order.get('status') == config.ORDER_STATUS_CANCELLED:
-            send_telegram_private(user_id, "❌ Заказ уже отменён клиентом.")
+            send_telegram_private(user_id, "❌ Заказ уже закрыт (отменён).")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') == config.ORDER_STATUS_COMPLETED:
+            send_telegram_private(user_id, "❌ Заказ уже закрыт (завершён).")
             return jsonify({"status": "ok"}), 200
         
         # Определяем комиссию: если клиент предложил цену < 70 → 5 сом, иначе 10 сом
@@ -422,7 +447,11 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
             {"text": "❌ Отмена", "callback": f"taxi_cancel_{order_id}"}
         ]
         
-        send_telegram_private(user_id, driver_private_msg, arrived_button)
+        private_result = send_telegram_private(user_id, driver_private_msg, arrived_button)
+        if private_result and private_result.get("message_id"):
+            db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"), int(private_result["message_id"]))
+            db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "arrived_notified"), False)
+            db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "closed"), False)
         
         # Обновляем сообщение в группе
         updated_text = f"""🚖 *ЗАКАЗ ЗАБРАН* ✅
@@ -432,7 +461,7 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
 
 ⏱ Заказ в работе."""
         
-        edit_telegram_message(chat_id, message_id, updated_text)
+        edit_telegram_message(chat_id, message_id, updated_text, buttons=[])
         
         # Таймер на удаление сообщения "ЗАКАЗ ЗАБРАН" через 30 мин
         db.create_auction_timer(
@@ -453,95 +482,136 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-def handle_taxi_arrived(data: str, user_id: str, user_name: str, db) -> tuple:
-    """Обработка кнопки 'Приехал' — уведомление клиенту"""
+def handle_taxi_arrived(data: str, user_id: str, user_name: str,
+                        chat_id: str, message_id: int, db) -> tuple:
+    """Обработка кнопки 'Я приехал'."""
     try:
         order_id = data.split("_")[2]
-        
-        # Получаем заказ
         order = db.get_order(order_id)
-        
         if not order:
-            send_telegram_private(user_id, "❌ Заказ не найден.")
+            _close_taxi_driver_message(chat_id, message_id, "❌ Заказ уже закрыт или не найден.")
             return jsonify({"status": "ok"}), 200
-        
-        # Получаем данные водителя
+        if _is_taxi_order_closed(order):
+            _close_taxi_driver_message(chat_id, message_id, "❌ Заказ уже закрыт. Кнопки отключены.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('driver_id') and str(order.get('driver_id')) != str(user_id):
+            _close_taxi_driver_message(chat_id, message_id, "❌ Этот заказ закреплён за другим водителем.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') != config.ORDER_STATUS_IN_DELIVERY:
+            _close_taxi_driver_message(chat_id, message_id, "❌ Действие недоступно для текущего статуса заказа.")
+            return jsonify({"status": "ok"}), 200
+
+        active_msg_id = db.get_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"))
+        if active_msg_id and str(active_msg_id) != str(message_id):
+            _close_taxi_driver_message(chat_id, message_id, "❌ Это устаревшее сообщение. Используйте актуальное.")
+            return jsonify({"status": "ok"}), 200
+
+        arrived_notified = db.get_telegram_session_data(user_id, _taxi_driver_key(order_id, "arrived_notified"), False)
+        if arrived_notified:
+            _close_taxi_driver_message(chat_id, message_id, "✅ Клиент уже уведомлён.")
+            return jsonify({"status": "ok"}), 200
+
         driver = db.get_driver(user_id)
         car_info = ""
         if driver:
             car_info = f"\n🚘 *{driver.get('car_model', '')}* | {driver.get('plate', '')}"
-        
-        # Отправляем клиенту в WhatsApp
-        client_msg = f"""📍 *Водитель приехал и ожидает вас!*
-{car_info}
-👤 *Водитель:* {driver.get('name', user_name) if driver else user_name}
-📞 *Телефон:* {driver.get('phone', 'Не указан') if driver else 'Не указан'}
 
-🚶 Пожалуйста, выходите."""
-        
+        client_msg = (
+            "📍 *Водитель приехал и ожидает вас!*"
+            f"{car_info}\n"
+            f"👤 *Водитель:* {driver.get('name', user_name) if driver else user_name}\n"
+            f"📞 *Телефон:* {driver.get('phone', 'Не указан') if driver else 'Не указан'}\n\n"
+            "🚶 Пожалуйста, выходите."
+        )
         send_whatsapp(order.get('client_phone', ''), client_msg)
-        
-        # Подтверждаем водителю
-        send_telegram_private(
-            user_id,
+
+        db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "arrived_notified"), True)
+        db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"), int(message_id))
+
+        edit_telegram_message(
+            chat_id,
+            message_id,
             "✅ *Клиент уведомлён!*\n\n📍 Ожидайте клиента.",
             [
                 {"text": "✅ Завершить поездку", "callback": f"taxi_finish_{order_id}"},
                 {"text": "❌ Отменить", "callback": f"taxi_cancel_{order_id}"}
             ]
         )
-        
+
         db.log_transaction("TAXI_DRIVER_ARRIVED", user_id, order_id)
-        
         return jsonify({"status": "ok"}), 200
-        
     except Exception as e:
         logger.exception("Error handling taxi arrived")
-        send_telegram_private(user_id, "❌ Ошибка.")
+        _close_taxi_driver_message(chat_id, message_id, "❌ Ошибка обработки действия.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-def handle_taxi_finish(data: str, user_id: str, user_name: str, db) -> tuple:
-    """Завершение поездки водителем"""
+def handle_taxi_finish(data: str, user_id: str, user_name: str,
+                       chat_id: str, message_id: int, db) -> tuple:
+    """Завершение поездки водителем."""
     try:
         order_id = data.split("_")[2]
         order = db.get_order(order_id)
         if not order:
-            send_telegram_private(user_id, "❌ Заказ не найден.")
+            _close_taxi_driver_message(chat_id, message_id, "❌ Заказ уже закрыт или не найден.")
+            return jsonify({"status": "ok"}), 200
+        if _is_taxi_order_closed(order):
+            _close_taxi_driver_message(chat_id, message_id, "❌ Заказ уже закрыт. Кнопки отключены.")
             return jsonify({"status": "ok"}), 200
         if order.get('driver_id') and str(order.get('driver_id')) != str(user_id):
-            send_telegram_private(user_id, "❌ Этот заказ закреплён за другим водителем.")
+            _close_taxi_driver_message(chat_id, message_id, "❌ Этот заказ закреплён за другим водителем.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') != config.ORDER_STATUS_IN_DELIVERY:
+            _close_taxi_driver_message(chat_id, message_id, "❌ Действие недоступно для текущего статуса заказа.")
             return jsonify({"status": "ok"}), 200
 
-        db.update_order_status(
-            order_id,
-            config.ORDER_STATUS_COMPLETED,
-            completed_at=datetime.now()
-        )
+        active_msg_id = db.get_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"))
+        if active_msg_id and str(active_msg_id) != str(message_id):
+            _close_taxi_driver_message(chat_id, message_id, "❌ Это устаревшее сообщение. Используйте актуальное.")
+            return jsonify({"status": "ok"}), 200
 
-        send_telegram_private(user_id, "✅ Поездка завершена. Спасибо!")
+        arrived_notified = db.get_telegram_session_data(user_id, _taxi_driver_key(order_id, "arrived_notified"), False)
+        if not arrived_notified:
+            _close_taxi_driver_message(chat_id, message_id, "❌ Сначала нажмите «Я приехал».")
+            return jsonify({"status": "ok"}), 200
 
-        # Уведомление клиента
+        db.update_order_status(order_id, config.ORDER_STATUS_COMPLETED, completed_at=datetime.now())
         send_whatsapp(order.get('client_phone', ''), "✅ Ваша поездка завершена. Спасибо, что выбрали нас!")
+
+        db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "closed"), True)
+        db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"), int(message_id))
+        _close_taxi_driver_message(chat_id, message_id, "✅ Поездка завершена. Заказ закрыт.")
 
         db.log_transaction("TAXI_TRIP_FINISHED", user_id, order_id)
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.exception("Error finishing taxi trip")
-        send_telegram_private(user_id, "❌ Ошибка завершения.")
+        _close_taxi_driver_message(chat_id, message_id, "❌ Ошибка завершения поездки.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-def handle_taxi_cancel(data: str, user_id: str, user_name: str, db) -> tuple:
-    """Отмена заказа водителем с таймером комиссии"""
+def handle_taxi_cancel(data: str, user_id: str, user_name: str,
+                       chat_id: str, message_id: int, db) -> tuple:
+    """Отмена заказа водителем."""
     try:
         order_id = data.split("_")[2]
         order = db.get_order(order_id)
         if not order:
-            send_telegram_private(user_id, "❌ Заказ не найден.")
+            _close_taxi_driver_message(chat_id, message_id, "❌ Заказ уже закрыт или не найден.")
+            return jsonify({"status": "ok"}), 200
+        if _is_taxi_order_closed(order):
+            _close_taxi_driver_message(chat_id, message_id, "❌ Заказ уже закрыт. Кнопки отключены.")
             return jsonify({"status": "ok"}), 200
         if order.get('driver_id') and str(order.get('driver_id')) != str(user_id):
-            send_telegram_private(user_id, "❌ Этот заказ закреплён за другим водителем.")
+            _close_taxi_driver_message(chat_id, message_id, "❌ Этот заказ закреплён за другим водителем.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') != config.ORDER_STATUS_IN_DELIVERY:
+            _close_taxi_driver_message(chat_id, message_id, "❌ Действие недоступно для текущего статуса заказа.")
+            return jsonify({"status": "ok"}), 200
+
+        active_msg_id = db.get_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"))
+        if active_msg_id and str(active_msg_id) != str(message_id):
+            _close_taxi_driver_message(chat_id, message_id, "❌ Это устаревшее сообщение. Используйте актуальное.")
             return jsonify({"status": "ok"}), 200
 
         commission = float(order.get('driver_commission') or config.TAXI_COMMISSION)
@@ -550,7 +620,6 @@ def handle_taxi_cancel(data: str, user_id: str, user_name: str, db) -> tuple:
         if assigned_at:
             delta = datetime.now() - assigned_at
             refund = delta.total_seconds() <= 30
-        # Если нет метки времени, считаем что комиссия удержана
 
         if refund and commission > 0:
             db.update_driver_balance(user_id, commission, reason=f"Refund taxi {order_id}")
@@ -559,12 +628,14 @@ def handle_taxi_cancel(data: str, user_id: str, user_name: str, db) -> tuple:
 
         driver_msg = "❌ Заказ отменён."
         if refund:
-            driver_msg += f"\n💰 Комиссия не списана."
+            driver_msg += "\n💰 Комиссия не списана."
         else:
-            driver_msg += f"\n💰 Комиссия остаётся удержанной."
-        send_telegram_private(user_id, driver_msg)
+            driver_msg += "\n💰 Комиссия уже списана."
 
-        # Уведомление клиента
+        db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "closed"), True)
+        db.set_telegram_session_data(user_id, _taxi_driver_key(order_id, "active_message_id"), int(message_id))
+        _close_taxi_driver_message(chat_id, message_id, driver_msg)
+
         client_msg = ("❌ Ваш заказ отменён.\n"
                       "Хотите вызвать такси на тот же адрес и цену или отказаться?\n"
                       "Ответьте в чат: Да / Нет.")
@@ -580,11 +651,10 @@ def handle_taxi_cancel(data: str, user_id: str, user_name: str, db) -> tuple:
         send_whatsapp(client_phone, client_msg)
 
         db.log_transaction("TAXI_DRIVER_CANCEL", user_id, order_id, amount=(-commission if refund else None))
-
         return jsonify({"status": "ok"}), 200
     except Exception as e:
         logger.exception("Error cancelling taxi trip")
-        send_telegram_private(user_id, "❌ Ошибка отмены.")
+        _close_taxi_driver_message(chat_id, message_id, "❌ Ошибка отмены заказа.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 

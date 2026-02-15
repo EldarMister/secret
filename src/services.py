@@ -285,6 +285,29 @@ def send_telegram_private(telegram_id: str, message: str,
     return send_telegram_message(telegram_id, message, buttons)
 
 
+def answer_telegram_callback(callback_query_id: str, text: str = "",
+                             show_alert: bool = False) -> bool:
+    """Быстро подтвердить нажатие inline-кнопки в Telegram."""
+    try:
+        if not callback_query_id:
+            return False
+
+        url = f"{config.TELEGRAM_API_URL}/answerCallbackQuery"
+        payload = {
+            "callback_query_id": callback_query_id,
+        }
+        if text:
+            payload["text"] = text
+        if show_alert:
+            payload["show_alert"] = True
+
+        response = requests.post(url, json=payload, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Exception answering Telegram callback: {e}")
+        return False
+
+
 def send_telegram_photo(chat_id: str, photo_url: str, caption: str = "",
                         buttons: Optional[List[Dict]] = None) -> Optional[Dict]:
     """Отправить фото в Telegram"""
