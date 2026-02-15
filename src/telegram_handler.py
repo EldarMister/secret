@@ -68,6 +68,8 @@ def handle_callback_query(callback_query: dict) -> tuple:
         # === КАФЕ ===
         if data.startswith("cafe_accept_"):
             return handle_cafe_accept(data, user_id, user_name, chat_id, message_id, db)
+        elif data.startswith("cafe_decline_"):
+            return handle_cafe_decline(data, user_id, user_name, chat_id, message_id, db)
         elif data.startswith("cafe_ready_"):
             return handle_cafe_ready_time(data, user_id, user_name, db)
         
@@ -174,7 +176,7 @@ def handle_cafe_accept(data: str, user_id: str, user_name: str,
 
 📞 Клиент: {order.get('client_phone', 'N/A')}"""
         
-        edit_telegram_message(chat_id, message_id, updated_text)
+        edit_telegram_message(chat_id, message_id, updated_text, buttons=[])
         
         # Уведомляем клиента
         client_msg = f"""✅ *Заказ #{order_id}*
@@ -194,6 +196,58 @@ def handle_cafe_accept(data: str, user_id: str, user_name: str,
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
+def handle_cafe_decline(data: str, user_id: str, user_name: str,
+                        chat_id: str, message_id: int, db) -> tuple:
+    """Обработка отказа кафе с запросом причины."""
+    try:
+        order_id = data.split("_")[2]
+
+        order = db.get_order(order_id)
+        if not order:
+            send_telegram_private(user_id, "❌ Заказ не найден.")
+            return jsonify({"status": "ok"}), 200
+
+        status = order.get('status')
+        if status in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED):
+            send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            return jsonify({"status": "ok"}), 200
+        if status in (config.ORDER_STATUS_ACCEPTED, config.ORDER_STATUS_READY, config.ORDER_STATUS_IN_DELIVERY):
+            send_telegram_private(user_id, "❌ Заказ уже в работе. Отказ недоступен.")
+            return jsonify({"status": "ok"}), 200
+
+        # Сразу отменяем заказ и отключаем кнопки в группе
+        db.update_order_status(order_id, config.ORDER_STATUS_CANCELLED, provider_id=user_id)
+
+        updated_text = f"""❌ *ЗАКАЗ #{order_id} - ОТКАЗ*
+
+🏠 *Кафе:* {user_name}
+📝 Ожидаем комментарий причины отказа...
+
+📞 Клиент: {order.get('client_phone', '')}"""
+        edit_telegram_message(chat_id, message_id, updated_text, buttons=[])
+
+        # Помечаем аукцион обработанным, чтобы не сработал таймаут
+        timer = db.get_latest_auction_timer(order_id, config.SERVICE_CAFE)
+        if timer:
+            db.mark_auction_processed(timer['id'])
+
+        # Запрашиваем причину в ЛС
+        db.set_telegram_session_state(user_id, config.STATE_CAFE_DECLINE_REASON)
+        db.set_telegram_session_data(user_id, "cafe_decline_order_id", order_id)
+        db.set_telegram_session_data(user_id, "cafe_decline_chat_id", chat_id)
+        db.set_telegram_session_data(user_id, "cafe_decline_message_id", message_id)
+
+        send_telegram_private(user_id, config.CAFE_DECLINE_PROMPT)
+        db.log_transaction("CAFE_ORDER_DECLINED", user_id, order_id)
+
+        return jsonify({"status": "ok"}), 200
+
+    except Exception as e:
+        logger.exception("Error handling cafe decline")
+        send_telegram_private(user_id, "❌ Ошибка при отказе от заказа.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
 def handle_cafe_ready_time(data: str, user_id: str, user_name: str, db) -> tuple:
     """Обработка времени готовности кафе"""
     try:
@@ -201,24 +255,37 @@ def handle_cafe_ready_time(data: str, user_id: str, user_name: str, db) -> tuple
         order_id = parts[2]
         ready_time = int(parts[3])
         
-        # Обновляем заказ
-        db.update_order_status(order_id, config.ORDER_STATUS_READY, ready_time=ready_time)
-        
         # Получаем заказ
         order = db.get_order(order_id)
         if not order:
             return jsonify({"status": "error"}), 404
+        if order.get('status') in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED):
+            send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('provider_id') and str(order.get('provider_id')) != str(user_id):
+            send_telegram_private(user_id, "❌ Этот заказ закреплён за другим кафе.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') != config.ORDER_STATUS_ACCEPTED:
+            send_telegram_private(user_id, "❌ Заказ ещё не принят кафе. Указать время нельзя.")
+            return jsonify({"status": "ok"}), 200
+
+        # Обновляем заказ
+        db.update_order_status(order_id, config.ORDER_STATUS_READY, ready_time=ready_time)
         
         # Рассчитываем комиссию (5% всегда, без скидок)
         order_amount = order.get('price_total', 0) or 1000  # Если цена не указана, берем минимум
         commission_added, new_debt = db.update_cafe_debt(user_id, order_amount)
         commission_info = f"💰 Комиссия ({config.CAFE_COMMISSION_PERCENT}%) добавлена в долг"
         
+        order_details = (order.get('details') or '').strip()
+        details_block = f"\n📋 *Состав заказа:*\n{order_details[:500]}" if order_details else ""
+
         # Отправляем заявку в группу такси
         taxi_msg = f"""📦 *ДОСТАВКА ЕДЫ*
 
 🏠 *Забрать из:* {user_name}
 📋 *Заказ:* #{order_id}
+{details_block}
 ⏱ *Готово через:* {ready_time} мин
 📍 *Куда:* {order.get('address', 'Уточнить')}
 💳 *Оплата:* {config.PAYMENT_METHODS.get(order.get('payment_method'), 'Наличные')}
@@ -255,6 +322,46 @@ def handle_cafe_ready_time(data: str, user_id: str, user_name: str, db) -> tuple
     except Exception as e:
         logger.exception("Error handling cafe ready time")
         return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def _handle_cafe_decline_reason(user_id: str, user_name: str, reason: str, db) -> tuple:
+    """Сохранить причину отказа и уведомить клиента."""
+    reason = (reason or "").strip()
+    if not reason:
+        send_telegram_private(user_id, "❌ Причина не может быть пустой. Напишите причину отказа.")
+        return jsonify({"status": "ok"}), 200
+
+    order_id = db.get_telegram_session_data(user_id, "cafe_decline_order_id")
+    chat_id = db.get_telegram_session_data(user_id, "cafe_decline_chat_id")
+    message_id = db.get_telegram_session_data(user_id, "cafe_decline_message_id")
+
+    if not order_id:
+        db.clear_telegram_session(user_id)
+        send_telegram_private(user_id, "❌ Не найден заказ для отказа.")
+        return jsonify({"status": "ok"}), 200
+
+    order = db.get_order(order_id)
+    if not order:
+        db.clear_telegram_session(user_id)
+        send_telegram_private(user_id, "❌ Заказ не найден.")
+        return jsonify({"status": "ok"}), 200
+
+    # Обновляем сообщение в группе с причиной
+    if chat_id and message_id:
+        updated_text = f"""❌ *ЗАКАЗ #{order_id} - ОТКАЗ*
+
+🏠 *Кафе:* {user_name}
+📝 Причина: {reason}
+
+📞 Клиент: {order.get('client_phone', '')}"""
+        edit_telegram_message(chat_id, int(message_id), updated_text, buttons=[])
+
+    client_msg = config.CAFE_DECLINE_CLIENT.format(order_id=order_id, reason=reason)
+    send_whatsapp(order.get('client_phone', ''), client_msg)
+
+    db.clear_telegram_session(user_id)
+    db.log_transaction("CAFE_DECLINE_REASON", user_id, order_id, details=reason[:200])
+    return jsonify({"status": "ok"}), 200
 
 
 # =============================================================================
@@ -478,10 +585,15 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
         )
         commission_msg = f"\n💰 Списано комиссии: {commission} сом\n💳 Новый баланс: {new_balance} сом"
         
-        driver_car = driver.get('car_model') or 'Не указана'
-        driver_plate = driver.get('plate') or 'Не указан'
-        driver_name = driver.get('name') or user_name
-        driver_phone = driver.get('phone') or 'Не указан'
+        driver_name = (driver.get('name') if driver else None)
+        driver_name = (driver_name or "").strip() or user_name
+        driver_phone_raw = (driver.get('phone') if driver else None)
+        driver_phone_raw = (driver_phone_raw or "").strip()
+        driver_phone = format_phone(driver_phone_raw) if driver_phone_raw else 'Не указан'
+        driver_car = (driver.get('car_model') if driver else None)
+        driver_car = (driver_car or "").strip() or 'Не указана'
+        driver_plate = (driver.get('plate') if driver else None)
+        driver_plate = (driver_plate or "").strip() or 'Не указан'
 
         # Сообщаем клиенту
         driver_msg = f"""✅ *Машина найдена и выехала!*
@@ -575,10 +687,15 @@ def handle_taxi_arrived(data: str, user_id: str, user_name: str,
             return jsonify({"status": "ok"}), 200
 
         driver = db.get_driver(user_id)
-        driver_name = (driver.get('name') if driver else None) or user_name
-        driver_phone = (driver.get('phone') if driver else None) or 'Не указан'
-        driver_car = (driver.get('car_model') if driver else None) or 'Не указана'
-        driver_plate = (driver.get('plate') if driver else None) or 'Не указан'
+        driver_name = (driver.get('name') if driver else None)
+        driver_name = (driver_name or "").strip() or user_name
+        driver_phone_raw = (driver.get('phone') if driver else None)
+        driver_phone_raw = (driver_phone_raw or "").strip()
+        driver_phone = format_phone(driver_phone_raw) if driver_phone_raw else 'Не указан'
+        driver_car = (driver.get('car_model') if driver else None)
+        driver_car = (driver_car or "").strip() or 'Не указана'
+        driver_plate = (driver.get('plate') if driver else None)
+        driver_plate = (driver_plate or "").strip() or 'Не указан'
         car_info = f"\n🚘 *{driver_car}* | {driver_plate}"
 
         client_msg = (
@@ -990,6 +1107,9 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
         if not order:
             send_telegram_private(user_id, "❌ Заказ не найден.")
             return jsonify({"status": "ok"}), 200
+        if order.get('status') in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED):
+            send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            return jsonify({"status": "ok"}), 200
 
         if _is_delivery_order_closed(order):
             send_telegram_private(user_id, "❌ Заказ уже закрыт.")
@@ -1384,6 +1504,9 @@ def handle_telegram_message(message: dict) -> tuple:
             
             elif state == config.STATE_DRIVER_REG_CONFIRM:
                 return _handle_reg_confirm(user_id, text, db)
+            
+            elif state == config.STATE_CAFE_DECLINE_REASON:
+                return _handle_cafe_decline_reason(user_id, user_name, text, db)
         
         # =====================================================================
         # ВВОД ЦЕНЫ АПТЕКОЙ (через ЛС)

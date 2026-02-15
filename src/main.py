@@ -817,10 +817,10 @@ def _submit_cafe_order(user: User, db) -> tuple:
         phone=user.phone
     ) + f"\n\n{commission_info}"
     
-    buttons = [{
-        "text": "✅ Принять (2 мин)",
-        "callback": f"cafe_accept_{order_id}"
-    }]
+    buttons = [
+        {"text": "✅ Принять (2 мин)", "callback": f"cafe_accept_{order_id}"},
+        {"text": "❌ Отказать", "callback": f"cafe_decline_{order_id}"}
+    ]
     
     result = send_telegram_group(config.GROUP_CAFE_ID, telegram_msg, buttons)
     

@@ -51,10 +51,10 @@ def check_cafe_timeouts():
                 phone=order.get('client_phone', '')
             )
             
-            buttons = [{
-                "text": "🚨 ВЗЯТЬ СРОЧНО!",
-                "callback": f"cafe_accept_{order_id}"
-            }]
+            buttons = [
+                {"text": "🚨 ВЗЯТЬ СРОЧНО!", "callback": f"cafe_accept_{order_id}"},
+                {"text": "❌ Отказать", "callback": f"cafe_decline_{order_id}"}
+            ]
             
             edit_telegram_message(chat_id, message_id, updated_msg, buttons)
             
