@@ -317,6 +317,9 @@ def handle_whatsapp():
             if not cancelled:
                 send_whatsapp(user.phone, config.ORDER_CANCELLED)
             return jsonify({"status": "ok"}), 200
+
+        if user.current_state == config.STATE_TAXI_REORDER_CHOICE:
+            return handle_taxi_reorder_choice(user, incoming_msg, db)
         
         if user.current_state == config.STATE_IDLE:
             return handle_idle_state(user, incoming_msg, db)
@@ -1082,6 +1085,59 @@ def handle_pharmacy_request(user: User, message: str, media_url: str, db) -> tup
 # =============================================================================
 # TAXI FLOW
 # =============================================================================
+
+def handle_taxi_reorder_choice(user: User, message: str, db) -> tuple:
+    """Обработка ответа клиента после отмены водителем: повторить заказ или начать новый."""
+    msg_lower = (message or "").lower().strip()
+
+    yes_words = {"да", "ооба", "yes", "1", "btn_taxi_reorder_yes"}
+    no_words = {"нет", "жок", "no", "2", "btn_taxi_reorder_no"}
+
+    if msg_lower in yes_words:
+        route = (user.get_temp_data('taxi_reorder_route', '') or '').strip()
+        if not route:
+            user.clear_temp_data()
+            user.set_temp_data('service_type', config.SERVICE_TAXI)
+            user.set_temp_data('taxi_from', '')
+            user.set_temp_data('taxi_to', '')
+            user.set_state(config.STATE_TAXI_ROUTE)
+            send_whatsapp(user.phone, config.TAXI_PROMPT)
+            return jsonify({"status": "ok"}), 200
+
+        raw_price = user.get_temp_data('taxi_reorder_price', 0)
+        try:
+            price = float(raw_price or 0)
+        except (TypeError, ValueError):
+            price = 0
+
+        user.set_temp_data('service_type', config.SERVICE_TAXI)
+        user.set_temp_data('taxi_route', route)
+        user.set_temp_data('taxi_custom_price', price if price > 0 else None)
+
+        # Для совместимости с остальным flow заполняем откуда/куда если маршрут разделён.
+        parts = [p.strip() for p in re.split(r"\s*[—-]\s*", route, maxsplit=1) if p.strip()]
+        if len(parts) == 2:
+            user.set_temp_data('taxi_from', parts[0])
+            user.set_temp_data('taxi_to', parts[1])
+
+        return _submit_taxi_order(user, db)
+
+    if msg_lower in no_words:
+        user.clear_temp_data()
+        user.set_temp_data('service_type', config.SERVICE_TAXI)
+        user.set_temp_data('taxi_from', '')
+        user.set_temp_data('taxi_to', '')
+        user.set_state(config.STATE_TAXI_ROUTE)
+        send_whatsapp(user.phone, config.TAXI_PROMPT)
+        return jsonify({"status": "ok"}), 200
+
+    send_whatsapp(
+        user.phone,
+        "🚖 Повторить тот же заказ?\n"
+        "Ооба болсо *Да*, жаңы маршрут болсо *Нет/Жок* деп жазыңыз."
+    )
+    return jsonify({"status": "ok"}), 200
+
 
 def _send_taxi_price_choice(phone: str, from_address: str, to_address: str) -> bool:
     """Отправить выбор цены для такси с кнопками и fallback на текст."""

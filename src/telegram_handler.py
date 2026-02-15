@@ -568,7 +568,16 @@ def handle_taxi_cancel(data: str, user_id: str, user_name: str, db) -> tuple:
         client_msg = ("❌ Ваш заказ отменён.\n"
                       "Хотите вызвать такси на тот же адрес и цену или отказаться?\n"
                       "Ответьте в чат: Да / Нет.")
-        send_whatsapp(order.get('client_phone', ''), client_msg)
+        client_phone = order.get('client_phone', '')
+        if client_phone:
+            client_user = db.get_user(client_phone)
+            if client_user:
+                client_user.set_state(config.STATE_TAXI_REORDER_CHOICE)
+                client_user.set_temp_data('service_type', config.SERVICE_TAXI)
+                client_user.set_temp_data('taxi_reorder_route', order.get('details', '') or '')
+                client_user.set_temp_data('taxi_reorder_price', float(order.get('price_total') or 0))
+
+        send_whatsapp(client_phone, client_msg)
 
         db.log_transaction("TAXI_DRIVER_CANCEL", user_id, order_id, amount=(-commission if refund else None))
 
