@@ -102,6 +102,12 @@ def handle_callback_query(callback_query: dict) -> tuple:
         # === ДОСТАВКА ЕДЫ ===
         elif data.startswith("delivery_take_"):
             return handle_delivery_take(data, user_id, user_name, chat_id, message_id, db)
+        elif data.startswith("delivery_arrived_"):
+            return handle_delivery_arrived(data, user_id, user_name, chat_id, message_id, db)
+        elif data.startswith("delivery_finish_"):
+            return handle_delivery_finish(data, user_id, user_name, chat_id, message_id, db)
+        elif data.startswith("delivery_cancel_"):
+            return handle_delivery_cancel(data, user_id, user_name, chat_id, message_id, db)
         
         # === АДМИН ===
         elif data.startswith("admin_"):
@@ -472,13 +478,18 @@ def handle_taxi_take(data: str, user_id: str, user_name: str,
         )
         commission_msg = f"\n💰 Списано комиссии: {commission} сом\n💳 Новый баланс: {new_balance} сом"
         
+        driver_car = driver.get('car_model') or 'Не указана'
+        driver_plate = driver.get('plate') or 'Не указан'
+        driver_name = driver.get('name') or user_name
+        driver_phone = driver.get('phone') or 'Не указан'
+
         # Сообщаем клиенту
         driver_msg = f"""✅ *Машина найдена и выехала!*
 
-🚘 *Автомобиль:* {driver.get('car_model', 'Не указана')}
-🔢 *Номер:* {driver.get('plate', 'Не указан')}
-👤 *Водитель:* {driver.get('name', user_name)}
-📞 *Телефон:* {driver.get('phone', 'Не указан')}
+🚘 *Автомобиль:* {driver_car}
+🔢 *Номер:* {driver_plate}
+👤 *Водитель:* {driver_name}
+📞 *Телефон:* {driver_phone}
 
 ⏱ Ожидайте прибытия."""
         
@@ -564,15 +575,17 @@ def handle_taxi_arrived(data: str, user_id: str, user_name: str,
             return jsonify({"status": "ok"}), 200
 
         driver = db.get_driver(user_id)
-        car_info = ""
-        if driver:
-            car_info = f"\n🚘 *{driver.get('car_model', '')}* | {driver.get('plate', '')}"
+        driver_name = (driver.get('name') if driver else None) or user_name
+        driver_phone = (driver.get('phone') if driver else None) or 'Не указан'
+        driver_car = (driver.get('car_model') if driver else None) or 'Не указана'
+        driver_plate = (driver.get('plate') if driver else None) or 'Не указан'
+        car_info = f"\n🚘 *{driver_car}* | {driver_plate}"
 
         client_msg = (
             "📍 *Водитель приехал и ожидает вас!*"
             f"{car_info}\n"
-            f"👤 *Водитель:* {driver.get('name', user_name) if driver else user_name}\n"
-            f"📞 *Телефон:* {driver.get('phone', 'Не указан') if driver else 'Не указан'}\n\n"
+            f"👤 *Водитель:* {driver_name}\n"
+            f"📞 *Телефон:* {driver_phone}\n\n"
             "🚶 Пожалуйста, выходите."
         )
         send_whatsapp(order.get('client_phone', ''), client_msg)
@@ -948,21 +961,44 @@ def handle_shop_call_taxi(data: str, user_id: str, chat_id: str, message_id: int
 # DELIVERY HANDLERS
 # =============================================================================
 
+def _delivery_driver_key(order_id: str, suffix: str) -> str:
+    return f"delivery_order_{order_id}_{suffix}"
+
+
+def _close_delivery_driver_message(chat_id: str, message_id: int, text: str) -> None:
+    """Закрыть (деактивировать) сообщение с кнопками у водителя доставки."""
+    try:
+        if chat_id and message_id:
+            edit_telegram_message(chat_id, message_id, text, buttons=[])
+    except Exception:
+        logger.exception("Failed to close delivery driver message")
+
+
+def _is_delivery_order_closed(order: dict) -> bool:
+    status = order.get('status')
+    return status in (config.ORDER_STATUS_CANCELLED, config.ORDER_STATUS_COMPLETED)
+
+
 def handle_delivery_take(data: str, user_id: str, user_name: str,
                          chat_id: str, message_id: int, db) -> tuple:
     """Обработка взятия доставки еды/лекарств/магазина"""
     try:
         order_id = data.split("_")[2]
-        
-        # Проверяем, не занят ли заказ
-        if db.is_order_taken(order_id):
-            send_telegram_private(user_id, "❌ Заказ уже забрали другие!")
-            return jsonify({"status": "ok"}), 200
-        
+
         # Получаем заказ
         order = db.get_order(order_id)
         if not order:
-            return jsonify({"status": "error"}), 404
+            send_telegram_private(user_id, "❌ Заказ не найден.")
+            return jsonify({"status": "ok"}), 200
+
+        if _is_delivery_order_closed(order):
+            send_telegram_private(user_id, "❌ Заказ уже закрыт.")
+            return jsonify({"status": "ok"}), 200
+
+        current_driver = order.get('driver_id')
+        if current_driver and str(current_driver) != str(user_id):
+            send_telegram_private(user_id, "❌ Заказ уже забрали другие!")
+            return jsonify({"status": "ok"}), 200
         
         # Определяем тип доставки и комиссию
         service_type = order.get('service_type')
@@ -995,15 +1031,19 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
             db.add_driver(user_id, user_name)
             driver = db.get_driver(user_id)
         
+        driver_name = driver.get('name') or user_name
+        driver_phone = driver.get('phone') or 'Не указан'
+        driver_plate = driver.get('plate') or 'Не указан'
+        
         # Обновляем статус
         db.update_order_status(order_id, config.ORDER_STATUS_IN_DELIVERY, driver_id=user_id)
         
         # Сообщаем клиенту
         client_msg = f"""✅ *Курьер найден!*
 
-🚖 *Водитель:* {driver.get('name', user_name)}
-📞 *Телефон:* {driver.get('phone', 'Не указан')}
-🔢 *Номер:* {driver.get('plate', 'Не указан')}
+🚖 *Водитель:* {driver_name}
+📞 *Телефон:* {driver_phone}
+🔢 *Номер:* {driver_plate}
 
 ⏱ Ожидайте доставку."""
         
@@ -1017,8 +1057,16 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
 📍 *Адрес:* {order.get('address', 'Уточнить')}
 
 💰 Не забудьте взять оплату.{commission_msg}"""
-        
-        send_telegram_private(user_id, driver_msg)
+
+        delivery_buttons = [
+            {"text": "📍 Я приехал", "callback": f"delivery_arrived_{order_id}"},
+            {"text": "❌ Отменить", "callback": f"delivery_cancel_{order_id}"}
+        ]
+        private_result = send_telegram_private(user_id, driver_msg, delivery_buttons)
+        if private_result and private_result.get("message_id"):
+            db.set_telegram_session_data(user_id, _delivery_driver_key(order_id, "active_message_id"), int(private_result["message_id"]))
+            db.set_telegram_session_data(user_id, _delivery_driver_key(order_id, "arrived_notified"), False)
+            db.set_telegram_session_data(user_id, _delivery_driver_key(order_id, "closed"), False)
         
         # Обновляем сообщение в группе
         updated_text = f"""📦 *ДОСТАВКА ЗАБРАТА* ✅
@@ -1028,7 +1076,7 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
 
 ⏱ Доставка в процессе."""
         
-        edit_telegram_message(chat_id, message_id, updated_text)
+        edit_telegram_message(chat_id, message_id, updated_text, buttons=[])
         
         db.log_transaction("DELIVERY_TAKEN", user_id, order_id)
         
@@ -1036,6 +1084,151 @@ def handle_delivery_take(data: str, user_id: str, user_name: str,
         
     except Exception as e:
         logger.exception("Error handling delivery take")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def handle_delivery_arrived(data: str, user_id: str, user_name: str,
+                            chat_id: str, message_id: int, db) -> tuple:
+    """Водитель доставки нажал 'Я приехал'."""
+    try:
+        order_id = data.split("_")[2]
+        order = db.get_order(order_id)
+        if not order:
+            _close_delivery_driver_message(chat_id, message_id, "❌ Заказ уже закрыт или не найден.")
+            return jsonify({"status": "ok"}), 200
+        if _is_delivery_order_closed(order):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Заказ уже закрыт. Кнопки отключены.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('driver_id') and str(order.get('driver_id')) != str(user_id):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Этот заказ закреплён за другим водителем.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') != config.ORDER_STATUS_IN_DELIVERY:
+            _close_delivery_driver_message(chat_id, message_id, "❌ Действие недоступно для текущего статуса заказа.")
+            return jsonify({"status": "ok"}), 200
+
+        active_msg_id = db.get_telegram_session_data(user_id, _delivery_driver_key(order_id, "active_message_id"))
+        if active_msg_id and str(active_msg_id) != str(message_id):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Это устаревшее сообщение. Используйте актуальное.")
+            return jsonify({"status": "ok"}), 200
+
+        arrived_notified = db.get_telegram_session_data(user_id, _delivery_driver_key(order_id, "arrived_notified"), False)
+        if arrived_notified:
+            _close_delivery_driver_message(chat_id, message_id, "✅ Клиент уже уведомлён.")
+            return jsonify({"status": "ok"}), 200
+
+        driver = db.get_driver(user_id)
+        driver_name = (driver.get('name') if driver else None) or user_name
+        driver_phone = (driver.get('phone') if driver else None) or 'Не указан'
+        driver_plate = (driver.get('plate') if driver else None) or 'Не указан'
+
+        client_msg = (
+            "📍 *Курьер приехал и ожидает вас!*\n"
+            f"👤 *Курьер:* {driver_name}\n"
+            f"📞 *Телефон:* {driver_phone}\n"
+            f"🔢 *Номер:* {driver_plate}\n\n"
+            "🚶 Пожалуйста, выходите."
+        )
+        send_whatsapp(order.get('client_phone', ''), client_msg)
+
+        db.set_telegram_session_data(user_id, _delivery_driver_key(order_id, "arrived_notified"), True)
+        db.set_telegram_session_data(user_id, _delivery_driver_key(order_id, "active_message_id"), int(message_id))
+
+        edit_telegram_message(
+            chat_id,
+            message_id,
+            "✅ *Клиент уведомлён!*\n\n📍 Ожидайте клиента.",
+            [
+                {"text": "✅ Завершить доставку", "callback": f"delivery_finish_{order_id}"},
+                {"text": "❌ Отменить", "callback": f"delivery_cancel_{order_id}"}
+            ]
+        )
+
+        db.log_transaction("DELIVERY_DRIVER_ARRIVED", user_id, order_id)
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.exception("Error handling delivery arrived")
+        _close_delivery_driver_message(chat_id, message_id, "❌ Ошибка обработки действия.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def handle_delivery_finish(data: str, user_id: str, user_name: str,
+                           chat_id: str, message_id: int, db) -> tuple:
+    """Завершение доставки водителем."""
+    try:
+        order_id = data.split("_")[2]
+        order = db.get_order(order_id)
+        if not order:
+            _close_delivery_driver_message(chat_id, message_id, "❌ Заказ уже закрыт или не найден.")
+            return jsonify({"status": "ok"}), 200
+        if _is_delivery_order_closed(order):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Заказ уже закрыт. Кнопки отключены.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('driver_id') and str(order.get('driver_id')) != str(user_id):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Этот заказ закреплён за другим водителем.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') != config.ORDER_STATUS_IN_DELIVERY:
+            _close_delivery_driver_message(chat_id, message_id, "❌ Действие недоступно для текущего статуса заказа.")
+            return jsonify({"status": "ok"}), 200
+
+        active_msg_id = db.get_telegram_session_data(user_id, _delivery_driver_key(order_id, "active_message_id"))
+        if active_msg_id and str(active_msg_id) != str(message_id):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Это устаревшее сообщение. Используйте актуальное.")
+            return jsonify({"status": "ok"}), 200
+
+        arrived_notified = db.get_telegram_session_data(user_id, _delivery_driver_key(order_id, "arrived_notified"), False)
+        if not arrived_notified:
+            _close_delivery_driver_message(chat_id, message_id, "❌ Сначала нажмите «Я приехал».")
+            return jsonify({"status": "ok"}), 200
+
+        db.update_order_status(order_id, config.ORDER_STATUS_COMPLETED, completed_at=datetime.now())
+        send_whatsapp(order.get('client_phone', ''), "✅ Доставка завершена. Спасибо, что выбрали нас!")
+
+        db.set_telegram_session_data(user_id, _delivery_driver_key(order_id, "closed"), True)
+        db.set_telegram_session_data(user_id, _delivery_driver_key(order_id, "active_message_id"), int(message_id))
+        _close_delivery_driver_message(chat_id, message_id, "✅ Доставка завершена. Заказ закрыт.")
+
+        db.log_transaction("DELIVERY_FINISHED", user_id, order_id)
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.exception("Error finishing delivery")
+        _close_delivery_driver_message(chat_id, message_id, "❌ Ошибка завершения доставки.")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+def handle_delivery_cancel(data: str, user_id: str, user_name: str,
+                           chat_id: str, message_id: int, db) -> tuple:
+    """Отмена доставки водителем."""
+    try:
+        order_id = data.split("_")[2]
+        order = db.get_order(order_id)
+        if not order:
+            _close_delivery_driver_message(chat_id, message_id, "❌ Заказ уже закрыт или не найден.")
+            return jsonify({"status": "ok"}), 200
+        if _is_delivery_order_closed(order):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Заказ уже закрыт. Кнопки отключены.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('driver_id') and str(order.get('driver_id')) != str(user_id):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Этот заказ закреплён за другим водителем.")
+            return jsonify({"status": "ok"}), 200
+        if order.get('status') != config.ORDER_STATUS_IN_DELIVERY:
+            _close_delivery_driver_message(chat_id, message_id, "❌ Действие недоступно для текущего статуса заказа.")
+            return jsonify({"status": "ok"}), 200
+
+        active_msg_id = db.get_telegram_session_data(user_id, _delivery_driver_key(order_id, "active_message_id"))
+        if active_msg_id and str(active_msg_id) != str(message_id):
+            _close_delivery_driver_message(chat_id, message_id, "❌ Это устаревшее сообщение. Используйте актуальное.")
+            return jsonify({"status": "ok"}), 200
+
+        db.update_order_status(order_id, config.ORDER_STATUS_CANCELLED, driver_id=None)
+        _close_delivery_driver_message(chat_id, message_id, "❌ Доставка отменена. Заказ закрыт.")
+
+        send_whatsapp(order.get('client_phone', ''), "❌ Доставка отменена курьером. Мы можем оформить новый заказ.")
+
+        db.log_transaction("DELIVERY_CANCELLED", user_id, order_id)
+        return jsonify({"status": "ok"}), 200
+    except Exception as e:
+        logger.exception("Error cancelling delivery")
+        _close_delivery_driver_message(chat_id, message_id, "❌ Ошибка отмены доставки.")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
