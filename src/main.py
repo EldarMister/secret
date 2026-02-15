@@ -105,6 +105,56 @@ def _addresses_equal(addr1: str, addr2: str) -> bool:
     return bool(n1) and n1 == n2
 
 
+def _is_concrete_order_details(text: str, service: str) -> bool:
+    """
+    True only for concrete dish/product lists.
+    Intent-only phrases like "тамак керек", "кафе", "товарлар" return False.
+    """
+    if not text:
+        return False
+
+    raw = text.strip()
+    if not raw:
+        return False
+
+    lowered = re.sub(r"\s+", " ", raw.lower()).strip()
+    tokens = re.findall(r"[a-zA-Zа-яА-ЯёЁ0-9]+", lowered)
+    if not tokens:
+        return False
+
+    generic_intent_words = {
+        "кафе", "еда", "тамак", "оокат", "меню", "мену", "миню", "мэню",
+        "товар", "товары", "товарлар", "продукт", "продукты", "магазин", "дүкөн",
+        "заказ", "керек", "нужно", "хочу"
+    }
+    if service == config.SERVICE_SHOP:
+        generic_intent_words.update({"сатып", "алуу", "покупка", "покупки"})
+
+    # Clear intent-only short phrases
+    if len(tokens) <= 4 and all(t in generic_intent_words for t in tokens):
+        return False
+    if lowered in {"тамак керек", "оокат керек", "кафе", "товарлар", "товары", "магазин"}:
+        return False
+
+    # Strong concrete signals: numbers/quantities/list formatting
+    if re.search(r"\b\d+\b", lowered):
+        return True
+    if re.search(r"\b(шт|кг|гр|г|л|мл|kg|gr|ml|x\d+)\b", lowered):
+        return True
+    if any(sep in raw for sep in [",", ";", "\n"]):
+        return True
+    if re.search(r"(^|\n)\s*[-*•]\s*", raw):
+        return True
+
+    meaningful = [t for t in tokens if t not in generic_intent_words]
+    if len(meaningful) >= 2:
+        return True
+    if len(meaningful) == 1:
+        return True
+
+    return False
+
+
 def _cancel_order_in_group(order_id: str, service_type: str, db, text: str) -> None:
     """Обновить сообщение в группе на 'заказ отменен' и убрать кнопки"""
     timer = db.get_latest_auction_timer(order_id, service_type)
@@ -419,7 +469,8 @@ def handle_idle_state(user: User, message: str, db) -> tuple:
     
     # === КАФЕ ===
     elif intent == "cafe":
-        order_details = nlu_result.get("order_details")
+        order_details_raw = nlu_result.get("order_details")
+        order_details = order_details_raw if _is_concrete_order_details(order_details_raw, config.SERVICE_CAFE) else None
         
         if order_details:
             # ИИ извлёк детали заказа — спрашиваем адрес
@@ -436,7 +487,8 @@ def handle_idle_state(user: User, message: str, db) -> tuple:
     
     # === МАГАЗИН ===
     elif intent == "shop":
-        order_details = nlu_result.get("order_details")
+        order_details_raw = nlu_result.get("order_details")
+        order_details = order_details_raw if _is_concrete_order_details(order_details_raw, config.SERVICE_SHOP) else None
         
         if order_details:
             # ИИ извлёк список — к подтверждению
