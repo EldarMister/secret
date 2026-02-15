@@ -41,7 +41,7 @@ MAYBE_VAGUE = {"дом", "уй", "үй", "квартира", "кв"}
 # Слова отмены заказа (включая опечатки и варианты на кыргызском)
 CANCEL_WORDS = {
     "отмена", "отменить", "отказ", "cancel", "стоп", "stop",
-    "жок", "токтот", "баш тарт",
+    "токтот", "баш тарт",
     "атмина", "атмин", "одмена", "кайтуу"
 }
 CANCEL_PREFIXES = ("отмен", "атмин", "атмина", "одмен", "артка", "кайт")
@@ -64,6 +64,11 @@ def _is_cancellation(message: str) -> bool:
     """Проверяет, хочет ли пользователь отменить заказ"""
     msg_lower = message.lower().strip()
     if not msg_lower:
+        return False
+
+    # Эти слова используются в шагах подтверждения/выбора и не должны быть
+    # глобальной отменой.
+    if msg_lower in ('жок', 'нет', 'жо', 'жог'):
         return False
 
     # Точное совпадение
@@ -247,8 +252,14 @@ def handle_whatsapp():
         
         # === ROUTING ===
         
-        # Проверка на отмену (в любом состоянии)
-        if _is_cancellation(incoming_msg):
+        # Проверка на отмену (в любом состоянии),
+        # кроме шага выбора цены такси: "Жок/Нет" там означает стандартный тариф.
+        msg_lower = incoming_msg.lower().strip()
+        is_taxi_price_decline = (
+            user.current_state == config.STATE_TAXI_PRICE_CHOICE and
+            msg_lower in ('жок', 'нет', 'no', '2', 'btn_taxi_standard')
+        )
+        if _is_cancellation(incoming_msg) and not is_taxi_price_decline:
             logger.info(f"User {sender_phone} cancelled order in state {user.current_state}")
             cancelled = handle_client_cancel(user, db)
             user.set_state(config.STATE_IDLE)
