@@ -280,7 +280,12 @@ def handle_whatsapp():
         
         # Такси
         elif user.current_state == config.STATE_TAXI_ROUTE:
-            return handle_taxi_route(user, incoming_msg, db)
+            return handle_taxi_route(
+                user,
+                incoming_msg,
+                db,
+                is_voice_input=(media_type in ['audio/ogg', 'audio/aac'])
+            )
         elif user.current_state == config.STATE_TAXI_PRICE_CHOICE:
             return handle_taxi_price_choice(user, incoming_msg, db)
         elif user.current_state == config.STATE_TAXI_CUSTOM_PRICE:
@@ -1030,7 +1035,7 @@ def _send_taxi_price_choice(phone: str, from_address: str, to_address: str) -> b
     return send_whatsapp(phone, price_choice_msg)
 
 
-def handle_taxi_route(user: User, message: str, db) -> tuple:
+def handle_taxi_route(user: User, message: str, db, is_voice_input: bool = False) -> tuple:
     """Обработка маршрута такси: собираем откуда/куда до полной информации."""
     msg = message.strip()
     if not msg:
@@ -1090,7 +1095,14 @@ def handle_taxi_route(user: User, message: str, db) -> tuple:
             return jsonify({"status": "ok"}), 200
         return _go_to_price_choice(parsed_from, parsed_to)
 
-    # Пошаговый сбор недостающего адреса
+    # Для текстового ввода не уточняем адреса, как просил пользователь:
+    # сразу переходим к выбору цены (старый быстрый сценарий).
+    if not is_voice_input:
+        fast_from = parsed_from or msg
+        fast_to = parsed_to or msg
+        return _go_to_price_choice(fast_from, fast_to)
+
+    # Для голосового ввода — пошаговый сбор недостающего адреса
     if not current_from and not current_to:
         single_addr = parsed_from or parsed_to or msg
         if _is_vague_address(single_addr):
@@ -1154,21 +1166,28 @@ def handle_taxi_price_choice(user: User, message: str, db) -> tuple:
     from_addr = user.get_temp_data('taxi_from', '')
     to_addr = user.get_temp_data('taxi_to', '')
     
-    # Клиент хочет предложить свою цену
+    # Если клиент сразу прислал число, воспринимаем как предложенную цену
+    numbers = re.findall(r'\d+', message)
+    if numbers and msg_lower not in ('1', '2'):
+        price = int(numbers[0])
+        if price < config.TAXI_CUSTOM_PRICE_MIN:
+            send_whatsapp(user.phone, config.TAXI_CUSTOM_PRICE_TOO_LOW)
+            return jsonify({"status": "ok"}), 200
+
+        user.set_temp_data('taxi_custom_price', price)
+        # Сразу создаем заказ без лишнего шага подтверждения
+        return _submit_taxi_order(user, db)
+
+    # Клиент хочет предложить свою цену (кнопкой/словом)
     if msg_lower in ('btn_taxi_custom', 'да', 'yes', 'ооба', 'ообо', '1'):
         user.set_state(config.STATE_TAXI_CUSTOM_PRICE)
         send_whatsapp(user.phone, config.TAXI_CUSTOM_PRICE_PROMPT)
         return jsonify({"status": "ok"}), 200
     
-    # Клиент отказался — стандартный тариф
+    # Клиент отказался — сразу стандартный тариф
     if msg_lower in ('btn_taxi_standard', 'нет', 'no', 'жок', '2'):
-        user.set_state(config.STATE_CONFIRM_ORDER)
-        confirm_msg = config.CONFIRM_TAXI.format(
-            from_address=from_addr,
-            to_address=to_addr
-        )
-        send_whatsapp(user.phone, confirm_msg)
-        return jsonify({"status": "ok"}), 200
+        user.set_temp_data('taxi_custom_price', None)
+        return _submit_taxi_order(user, db)
     
     # Непонятный ответ — переспрашиваем
     _send_taxi_price_choice(user.phone, from_addr, to_addr)
@@ -1191,21 +1210,9 @@ def handle_taxi_custom_price(user: User, message: str, db) -> tuple:
         send_whatsapp(user.phone, config.TAXI_CUSTOM_PRICE_TOO_LOW)
         return jsonify({"status": "ok"}), 200
     
-    # Сохраняем цену и переходим к подтверждению
+    # Сохраняем цену и сразу отправляем заказ в поиск водителя
     user.set_temp_data('taxi_custom_price', price)
-    user.set_state(config.STATE_CONFIRM_ORDER)
-    
-    from_addr = user.get_temp_data('taxi_from', '')
-    to_addr = user.get_temp_data('taxi_to', '')
-    
-    confirm_msg = config.CONFIRM_TAXI_CUSTOM_PRICE.format(
-        from_address=from_addr,
-        to_address=to_addr,
-        price=price
-    )
-    send_whatsapp(user.phone, confirm_msg)
-    
-    return jsonify({"status": "ok"}), 200
+    return _submit_taxi_order(user, db)
 
 
 # =============================================================================
