@@ -2008,6 +2008,7 @@ def _handle_reg_confirm(user_id: str, text: str, db) -> tuple:
 
 def _save_driver_registration(user_id: str, db) -> tuple:
     """Сохранение регистрации водителя"""
+<<<<<<< HEAD
 
     session = db.get_telegram_session(user_id)
     if not session:
@@ -2036,6 +2037,35 @@ def _save_driver_registration(user_id: str, db) -> tuple:
         )
         db.clear_telegram_session(user_id)
         return jsonify({"status": "error"}), 400
+=======
+    
+    session = db.get_telegram_session(user_id)
+    if not session:
+        logger.error(f"[BUG] No session found for driver {user_id}")
+        send_telegram_private(user_id, "❌ Ошибка: сессия не найдена. Начните регистрацию заново с /register")
+        return jsonify({"status": "error", "message": "session missing"}), 400
+
+    temp_data = session.get('temp_data', {})
+    driver_type = temp_data.get('driver_type', 'taxi')
+    name = (temp_data.get('name') or '').strip()
+    phone = (temp_data.get('phone') or '').strip()
+    car_model = (temp_data.get('car_model') or '').strip()
+    plate = (temp_data.get('plate') or '').strip()
+
+    logger.info(f"[DRIVER_REG] User {user_id} temp_data: {temp_data}")
+
+    missing_required = not name or not phone
+    missing_vehicle = driver_type != 'ant' and (not car_model or not plate)
+    if missing_required or missing_vehicle:
+        logger.error(f"[BUG] Missing fields for {user_id}: required={missing_required}, vehicle={missing_vehicle}")
+        db.clear_telegram_session(user_id)
+        send_telegram_private(
+            user_id,
+            "❌ Ошибка: не все данные были сохранены.\n\n"
+            "Пожалуйста, начните регистрацию заново с /register"
+        )
+        return jsonify({"status": "error", "message": "missing registration data"}), 400
+>>>>>>> 6ecbe3b (eldar)
     
     # Сохраняем водителя
     db.add_driver(
