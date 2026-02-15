@@ -1146,12 +1146,20 @@ class Database:
     def set_telegram_session_state(self, telegram_id: str, state: str) -> bool:
         """Установить состояние Telegram-сессии"""
         with self.get_cursor(commit=True) as cur:
+            # Шаг 1: Убедиться, что сессия существует (создать с пустыми данными, если нет)
             cur.execute(
-                """INSERT INTO telegram_sessions (telegram_id, state)
-                   VALUES (%s, %s)
-                   ON CONFLICT (telegram_id) DO UPDATE 
-                   SET state = %s, updated_at = CURRENT_TIMESTAMP""",
-                (telegram_id, state, state)
+                """INSERT INTO telegram_sessions (telegram_id, state, temp_data)
+                   VALUES (%s, 'IDLE', '{}'::jsonb)
+                   ON CONFLICT (telegram_id) DO NOTHING""",
+                (telegram_id,)
+            )
+
+            # Шаг 2: Обновить только state, НЕ трогая temp_data
+            cur.execute(
+                """UPDATE telegram_sessions
+                   SET state = %s, updated_at = CURRENT_TIMESTAMP
+                   WHERE telegram_id = %s""",
+                (state, telegram_id)
             )
             return cur.rowcount > 0
     
@@ -1162,11 +1170,16 @@ class Database:
             cur.execute(
                 """INSERT INTO telegram_sessions (telegram_id, temp_data)
                    VALUES (%s, %s::jsonb)
-                   ON CONFLICT (telegram_id) DO UPDATE 
+                   ON CONFLICT (telegram_id) DO UPDATE
                    SET temp_data = telegram_sessions.temp_data || %s::jsonb,
-                       updated_at = CURRENT_TIMESTAMP""",
+                       updated_at = CURRENT_TIMESTAMP
+                   RETURNING temp_data""",
                 (telegram_id, json.dumps({key: value}), json.dumps({key: value}))
             )
+            row = cur.fetchone()
+            if row:
+                result_data = dict(row)['temp_data']
+                logger.debug(f"[SESSION_DATA] {telegram_id}: {key}={value}, full_data={result_data}")
             return cur.rowcount > 0
     
     def clear_telegram_session(self, telegram_id: str) -> bool:

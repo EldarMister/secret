@@ -1998,15 +1998,34 @@ def _handle_reg_confirm(user_id: str, text: str, db) -> tuple:
 
 def _save_driver_registration(user_id: str, db) -> tuple:
     """Сохранение регистрации водителя"""
-    
+
     session = db.get_telegram_session(user_id)
+    if not session:
+        logger.error(f"[BUG] No session found for driver {user_id}")
+        send_telegram_private(user_id, "❌ Ошибка: сессия не найдена. Начните регистрацию заново с /driver")
+        return jsonify({"status": "error"}), 400
+
     temp_data = session.get('temp_data', {})
-    
+
+    # DEBUG: Логируем все данные, которые собрали
+    logger.info(f"[DRIVER_REG] User {user_id} temp_data: {temp_data}")
+
     driver_type = temp_data.get('driver_type', 'taxi')
     name = temp_data.get('name', '')
     phone = temp_data.get('phone', '')
     car_model = temp_data.get('car_model', '')
     plate = temp_data.get('plate', '')
+
+    # Валидация критичных полей
+    if not name or not phone:
+        logger.error(f"[BUG] Missing required fields for {user_id}: name={bool(name)}, phone={bool(phone)}")
+        send_telegram_private(
+            user_id,
+            "❌ Ошибка: не все данные были сохранены.\n\n"
+            "Пожалуйста, начните регистрацию заново с /driver"
+        )
+        db.clear_telegram_session(user_id)
+        return jsonify({"status": "error"}), 400
     
     # Сохраняем водителя
     db.add_driver(
